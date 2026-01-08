@@ -4,15 +4,11 @@ from src.utils.config_manager import ConfigManager, CONFIG_FILE, VISION_DATA_FIL
 from src.core.kinematics import ScaraKinematics
 from src.core.trajectory import TrajectoryV2
 from src.consts import const
-from src.vision.jxbpipeline import camrea_main
+from src.vision.jxbpipeline import VisionSystem
 from PyQt5.QtCore import QThread, pyqtSignal
 import time
 import json
 import os
-import sys
-
-# CONFIG_FILE = "config.json"
-# VISION_DATA_FILE = "vision_data.json"
 
 class Controller(QThread):
     log_signal = pyqtSignal(str)
@@ -562,7 +558,7 @@ class Controller(QThread):
             logger.info(f"camera_coords >>>>>>>> : {camera_coords}, loading : {loading}")
             camera_prepare_coords = self.prepare_params_for_camera({"coords": camera_coords, "config": config})
             logger.info(f"camera_prepare_coords >>>>>> : {camera_prepare_coords}")
-            pos = camrea_main(camera_prepare_coords, loading=loading) # 相机只要x,y,z，不要r参数
+            pos = VisionSystem().run(camera_prepare_coords, loading=loading) # 相机只要x,y,z，不要r参数
             return pos
         except Exception as e:
             logger.info(f"take photo position error: {e}")
