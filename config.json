@@ -1,0 +1,603 @@
+{
+    "plc_config": {
+        "ip": "192.168.0.10",
+        "port": 502
+    },
+    "robot_params": {
+        "l1": 850.0,
+        "l2": 650.0,
+        "z0": 0.0,
+        "nn3": 0.05
+    },
+    "origin_params": {
+        "name": "初始位置原点",
+        "coords": [
+            816.5,
+            -118.53,
+            0,
+            -53.34
+        ],
+        "config": "elbow_up",
+        "photo": 0
+    },
+    "processes": {
+        "0X40082": {
+            "name": "首次臂去上料位拍照",
+            "type": "vision_trigger",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        -10.4,
+                        929.3,
+                        20.0,
+                        -66.0
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 130
+        },
+        "0X40083": {
+            "name": "上料拍照位回门前等待位",
+            "type": "vision_trigger",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        979.71,
+                        -5.76,
+                        20.0,
+                        -65.92
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 131
+        },
+        "0X40084": {
+            "name": "首次臂去下料位拍照",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1105.24,
+                        -1013.39,
+                        20.0,
+                        29.18
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        -104.61,
+                        -1014.55,
+                        20.0,
+                        63.83
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                }
+            ],
+            "d_addr": 132
+        },
+        "0X40085": {
+            "name": "下料拍照位回门前等待位",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        989.04,
+                        -1125.45,
+                        20.0,
+                        18.65
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        834.64,
+                        -88.17,
+                        20.0,
+                        -54.82
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P3",
+                    "coords": [
+                        827.04,
+                        -86.63,
+                        20.0,
+                        -58.76
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 133
+        },
+        "0X40086": {
+            "name": "臂去加工料位吹气",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1324.04,
+                        -352.97,
+                        20.0,
+                        -14.4
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        1318.08,
+                        498.59,
+                        20.0,
+                        -40.44
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 134
+        },
+        "0X40087": {
+            "name": "臂去加工料位拍照",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1308.52,
+                        -48.52,
+                        70.0,
+                        -30.84
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        1201.19,
+                        -38.06,
+                        20.0,
+                        -41.93
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 135
+        },
+        "0X40088": {
+            "name": "臂去加工位取料",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "P1",
+                    "coords": [
+                        1201.19,
+                        -38.06,
+                        20.0,
+                        -41.93
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1307.7,
+                        -48.32,
+                        20.0,
+                        -31.36
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 136
+        },
+        "0X40089": {
+            "name": "臂去缓存位",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1307.71,
+                        -48.33,
+                        60.0,
+                        -31.36
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        878.69,
+                        -87.81,
+                        60.0,
+                        -56.86
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P3",
+                    "coords": [
+                        889.14,
+                        -94.07,
+                        20.0,
+                        -56.86
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 137
+        },
+        "0X4008A": {
+            "name": "臂去加工位吹气",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1385.33,
+                        -429.58,
+                        20.0,
+                        5.46
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        1311.64,
+                        525.55,
+                        20.0,
+                        -43.49
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 138
+        },
+        "0X4008B": {
+            "name": "臂去加工位拍照",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1326.79,
+                        -13.83,
+                        20.0,
+                        -29.18
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 139
+        },
+        "0X4008C": {
+            "name": "臂去上料位拍照",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        146.21,
+                        879.29,
+                        20.0,
+                        -55.24
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 140
+        },
+        "0X4008D": {
+            "name": "臂去上料位取料",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        175.8,
+                        918.74,
+                        -10.0,
+                        -55.22
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        183.73,
+                        928.33,
+                        20.0,
+                        -53.66
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 141
+        },
+        "0X4008E": {
+            "name": "臂去加工位放料",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        922.52,
+                        71.54,
+                        20.0,
+                        -69.53
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        1326.11,
+                        17.47,
+                        20.0,
+                        -31.12
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P3",
+                    "coords": [
+                        1337.19,
+                        -0.02,
+                        0.0,
+                        -30.6
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P4",
+                    "coords": [
+                        1334.93,
+                        3.82,
+                        10.0,
+                        -30.6
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P5",
+                    "coords": [
+                        842.94,
+                        -51.48,
+                        20.0,
+                        -60.12
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 142
+        },
+        "0X4008F": {
+            "name": "臂去缓存拍照位检测",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        963.84,
+                        -17.94,
+                        20.0,
+                        -60.07
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 143
+        },
+        "0X40090": {
+            "name": "臂缓存位取料",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        964.25,
+                        -4.68,
+                        0.0,
+                        -59.51
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        965.8,
+                        -5.52,
+                        30.0,
+                        -59.51
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 144
+        },
+        "0X40091": {
+            "name": "臂去放料位拍照",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        1004.78,
+                        -1083.94,
+                        20.0,
+                        0.4
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        138.83,
+                        -997.17,
+                        20.0,
+                        58.0
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P3",
+                    "coords": [
+                        86.02,
+                        -1003.11,
+                        0.0,
+                        58.0
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                }
+            ],
+            "d_addr": 145
+        },
+        "0X40092": {
+            "name": "臂去放料位放料",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        86.03,
+                        -1003.11,
+                        -20.0,
+                        58.0
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                }
+            ],
+            "d_addr": 146
+        },
+        "0X40093": {
+            "name": "放料位回等待位",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        929.07,
+                        -1177.54,
+                        20.0,
+                        53.2
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        832.81,
+                        -9.37,
+                        20.0,
+                        -65.53
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 147
+        },
+        "0X40096": {
+            "name": "等待位去取垫木位拍照",
+            "type": "standard",
+            "points": []
+        },
+        "0X40097": {
+            "name": "臂去取垫木",
+            "type": "standard",
+            "points": []
+        },
+        "0X40098": {
+            "name": "取垫木位去放垫木位拍照",
+            "type": "standard",
+            "points": []
+        },
+        "0X40099": {
+            "name": "臂去放垫木",
+            "type": "standard",
+            "points": [],
+            "d_addr": 153
+        },
+        "0X4009A": {
+            "name": "放垫木位去等待位",
+            "type": "standard",
+            "points": [],
+            "d_addr": 154
+        },
+        "0X4009C": {
+            "name": "臂从缓存拍照位去等待位置",
+            "type": "standard",
+            "points": [],
+            "d_addr": 156
+        },
+        "0X400A7": {
+            "name": "设备初始化",
+            "type": "standard",
+            "points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        816.5,
+                        -188.53,
+                        0.0,
+                        -53.34
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "d_addr": 167
+        }
+    },
+    "trajectory_params": {
+        "num_points": 7,
+        "max_velocity": null,
+        "acceleration_time": 0.2
+    }
+}
