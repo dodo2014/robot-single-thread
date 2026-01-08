@@ -307,6 +307,8 @@ class ScaraKinematics:
             logger.info(f"自动选择姿态: Elbow Down (变动 {diff_down:.2f}°)")
             return res_down
 
+
+
 # ================= 验证代码 =================
 if __name__ == "__main__":
     # 使用提供的逆解结果作为输入，验证是否能算回原来的坐标
