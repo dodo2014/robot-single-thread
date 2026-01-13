@@ -599,5 +599,13 @@
         "num_points": 7,
         "max_velocity": null,
         "acceleration_time": 0.2
+    },
+    "product_config": {
+        "model_list": [
+            "PN123456",
+            "PN14535",
+            "ABC1169"
+        ],
+        "current_model": "ABC1169"
     }
 }

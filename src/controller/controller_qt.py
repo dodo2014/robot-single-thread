@@ -4,11 +4,13 @@ from src.utils.config_manager import ConfigManager, CONFIG_FILE, VISION_DATA_FIL
 from src.core.kinematics import ScaraKinematics
 from src.core.trajectory import TrajectoryV2
 from src.consts import const
-from src.vision.jxbpipeline import VisionSystem
+# from src.vision.jxbpipeline import VisionSystem
+from src.vision.detect_algo import DetectAlgoService
 from PyQt5.QtCore import QThread, pyqtSignal
 import time
 import json
 import os
+
 
 class Controller(QThread):
     log_signal = pyqtSignal(str)
@@ -28,11 +30,17 @@ class Controller(QThread):
         # 启动时尝试加载上次的数据
         self.load_vision_file()
 
+        # 获取当前产品型号 (假设在 config_manager 中有)
+        current_product = self.cfg_manager.get_current_product_model()
+        # 初始化视觉服务单例
+        self.vision_service = DetectAlgoService(product_no=current_product)
+
         self.origin_point = self.cfg_manager.get_origin_params()  # 获取原点配置
         self.last_motion_end_point = self.origin_point  # 定义【全局当前坐标记录】，初始化为原点
         # 用于存储实时电机状态 [J1, J2, J3, J4], 初始化为 0.0，供 UI 读取
         self.last_axis_status = [0.0, 0.0, 0.0, 0.0]
         self.last_joint_status = [0.0, 0.0, 0.0, 0.0]
+
 
     def load_config(self):
         try:
@@ -74,7 +82,7 @@ class Controller(QThread):
         while self.running:
             try:
                 self.loop_once()
-                # 轮询间隔 2s
+                # 轮询间隔
                 # time.sleep(2)
                 self.msleep(1500)  # QThread 推荐用 msleep (毫秒)
             except KeyboardInterrupt:
@@ -89,6 +97,11 @@ class Controller(QThread):
     def stop_service(self):
         logger.info("正在停止控制服务...")
         self.running = False
+
+        # 关闭视觉服务，释放相机资源
+        if self.vision_service:
+            self.vision_service.shutdown()
+
         self.wait()  # 等待线程安全退出
         logger.info("控制服务已停止")
 
@@ -135,7 +148,8 @@ class Controller(QThread):
         """执行一次完整的轮询和处理"""
 
         e_stop_regs = self.plc.read_holding_registers(self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR), 1)
-        logger.info(f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
+        logger.info(
+            f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
 
         # === 1. 全局急停拦截 ===
         if self.check_estop():
@@ -537,7 +551,7 @@ class Controller(QThread):
     def take_photo_check(self):
         return "OK"
 
-    def take_photo_position(self, camera_coords, config, loading=None):
+    def take_photo_position(self, camera_coords, config, loading=None, ptype=1):
         """
         :param camera_coords:传给相机的拍照位置坐标
         :param loading, 上下料参数，1/上料，2/下料
@@ -558,12 +572,51 @@ class Controller(QThread):
             logger.info(f"camera_coords >>>>>>>> : {camera_coords}, loading : {loading}")
             camera_prepare_coords = self.prepare_params_for_camera({"coords": camera_coords, "config": config})
             logger.info(f"camera_prepare_coords >>>>>> : {camera_prepare_coords}")
-            pos = VisionSystem().run(camera_prepare_coords, loading=loading) # 相机只要x,y,z，不要r参数
-            return pos
+
+            # pos = VisionSystem().run(camera_prepare_coords, loading=loading) # 相机只要x,y,z，不要r参数
+
+            algo_response = self.vision_service.execute_detection(ptype)
+
+            if algo_response["code"] == 0:
+                result = algo_response["result"]
+                # 假设 C++ 返回的 result 结构是:
+                # { "ok": 1, "coords": [x, y, z, r], "type": "retrieve" }
+                # 或者如果是多目标: "coords": [[x,y,z,r], [x,y,z,r]]
+
+                # 兼容之前的 handle_vision_recursive 逻辑，我们需要适配格式
+
+                # 模拟适配逻辑 (根据实际 C++ 返回修改)：
+                detected_coords = result.get("coords", [])
+                # 如果返回的是单层列表 [x,y,z,r]，转为嵌套 [[x,y,z,r]]
+                if detected_coords and isinstance(detected_coords[0], (int, float)):
+                    detected_coords = [detected_coords]
+
+                trigger_type = "retrieve"  # 默认抓取
+
+                res = "ok" if 1 == result.get("ok") else "ng"
+
+                if 1 == result.get("ok"):
+                    logger.info(f"视觉识别成功: {detected_coords}")
+                elif 2 == result.get("ok"):
+                    logger.error(f"视觉识别失败: {detected_coords}")
+
+                return {
+                    "res": res,
+                    "ptype": ptype,
+                    "coords": detected_coords,
+                    "trigger": trigger_type
+                }
+            else:
+                logger.error(f"视觉识别失败: {algo_response.get('err_msg')}")
+
         except Exception as e:
             logger.info(f"take photo position error: {e}")
-            return {"res": "error"}
 
+        return {
+            "res": "ng",
+            "coords": [],
+            "trigger": ""
+        }
 
     def save_vision_data(self, process_addr, coords_list):
         """
@@ -688,18 +741,18 @@ class Controller(QThread):
         if not self.send_coords_batch(process_addr, points_to_send, 8):
             # 1. 检查急停
             if self.check_estop():
-                return False # 直接退出函数，即清除了当前流程数据
+                return False  # 直接退出函数，即清除了当前流程数据
 
             logger.error("坐标发送失败")
             return False
 
-        if self.check_estop(): return False # 确认是否因急停退出
+        if self.check_estop(): return False  # 确认是否因急停退出
         # 4. 握手 (11)
         self.plc.write_register(process_addr, 11)
 
         # 5. 等待到位 (12), timeout=-1表示无线等待
         if not self.wait_for_plc_val(process_addr, 12, timeout=10):
-            if self.check_estop(): return False # 再次确认是否因急停退出
+            if self.check_estop(): return False  # 再次确认是否因急停退出
 
             logger.error("等待到位超时")
             return False
@@ -826,12 +879,12 @@ class Controller(QThread):
                 if self.check_estop():
                     logger.critical("流程强制终止：急停触发")
                     self.last_motion_end_point = None  # 清除记忆点，强制下次重新获取实时位置
-                    return False # 直接退出函数，即清除了当前流程数据
-
+                    return False  # 直接退出函数，即清除了当前流程数据
 
                 # 1. 执行移动 (使用提取出的通用函数)
                 # 这会处理插值、发送、等待12
-                if not self._move_segment_to_target(process_addr=process_addr, start_point=start_point, target_point=end_point):
+                if not self._move_segment_to_target(process_addr=process_addr, start_point=start_point,
+                                                    target_point=end_point):
                     return False  # 移动失败(如急停)，直接退出
 
                 # 2. 拍照逻辑处理
@@ -886,7 +939,7 @@ class Controller(QThread):
                 [start_point, end_point],
                 num_inserts=const.point_interpolated_num
             )
-            points_to_send = interpolated_path[1:] # 去掉起点
+            points_to_send = interpolated_path[1:]  # 去掉起点
 
             # 拍照标志, 0/默认值，1/拍照，2/给坐标
             photo_trigger = end_point.get("photo", 0)
@@ -939,7 +992,6 @@ class Controller(QThread):
                     else:
                         logger.error("视觉定位失败 (未识别到目标)")
                         vision_ok = False
-
 
                 # 结果分支
                 if vision_ok:
@@ -1753,12 +1805,16 @@ class Controller(QThread):
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
         target_points_list = []
         for idx, coords in enumerate(vision_points_coords):
-            pt = {
-                "name": f"Vision_P{idx + 1}",
-                "coords": coords,
-                "photo": 0
-            }
-            target_points_list.append(pt)
+            # pt = {
+            #     "name": f"Vision_P{idx + 1}",
+            #     "coords": coords,
+            #     "photo": 0
+            # }
+            # target_points_list.append(pt)
+
+            relative_point = self.process_camera_result_to_plc_data(coords)
+            relative_point["name"] = f"Vision_P{idx + 1}"
+            target_points_list.append(relative_point)
 
         points = [process_start_point] + target_points_list
 
@@ -1907,12 +1963,15 @@ class Controller(QThread):
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
         target_points_list = []
         for idx, coords in enumerate(vision_points_coords):
-            pt = {
-                "name": f"Vision_P{idx + 1}",
-                "coords": coords,
-                "photo": 0
-            }
-            target_points_list.append(pt)
+            # pt = {
+            #     "name": f"Vision_P{idx + 1}",
+            #     "coords": coords,
+            #     "photo": 0
+            # }
+            # target_points_list.append(pt)
+            relative_point = self.process_camera_result_to_plc_data(coords)
+            relative_point["name"] = f"Vision_P{idx + 1}"
+            target_points_list.append(relative_point)
 
         points = [process_start_point] + target_points_list
 
@@ -2014,12 +2073,15 @@ class Controller(QThread):
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
         target_points_list = []
         for idx, coords in enumerate(vision_points_coords):
-            pt = {
-                "name": f"Vision_P{idx + 1}",
-                "coords": coords,
-                "photo": 0
-            }
-            target_points_list.append(pt)
+            # pt = {
+            #     "name": f"Vision_P{idx + 1}",
+            #     "coords": coords,
+            #     "photo": 0
+            # }
+            # target_points_list.append(pt)
+            relative_point = self.process_camera_result_to_plc_data(coords)
+            relative_point["name"] = f"Vision_P{idx + 1}"
+            target_points_list.append(relative_point)
 
         points = [process_start_point] + target_points_list
 
@@ -2091,7 +2153,6 @@ class Controller(QThread):
         # 4. 更新末端记录
         self.last_motion_end_point = full_sequence[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
-
 
     def handle_process_0x4009C(self, process_addr, value):
         if value != 10:

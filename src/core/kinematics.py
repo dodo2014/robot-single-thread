@@ -308,7 +308,6 @@ class ScaraKinematics:
             return res_down
 
 
-
 # ================= 验证代码 =================
 if __name__ == "__main__":
     # 使用提供的逆解结果作为输入，验证是否能算回原来的坐标
@@ -316,28 +315,149 @@ if __name__ == "__main__":
     # 逆解结果: the1=-12.5558, the2=137.7314, the3=40.0(假设z0=0) 或 90.0(假设z0=50), th4=95.0
 
     # 假设参数
-    L1 = 850
-    L2 = 650.0
-    Z0 = 0.0  # 假设 Z0 为 0
-    NN3 = 0.05
+    # L1 = 850
+    # L2 = 650.0
+    # Z0 = 0.0  # 假设 Z0 为 0
+    # NN3 = 0.05
 
     # 输入逆解算出来的关节角
-    t1 = -36.75
-    t2 = 44.62
-    t3 = -2.72  # 对应 ze=40.0, z0=0
-    t4 = 0.0
+    # t1 = -36.75
+    # t2 = 44.62
+    # t3 = -2.72  # 对应 ze=40.0, z0=0
+    # t4 = 0.0
 
-    print(f"--- 正运动学验证 ---")
-    print(f"输入关节角: J1={t1:.4f}, J2={t2:.4f}, J3={t3}, J4={t4}")
+    # print(f"--- 正运动学验证 ---")
+    # print(f"输入关节角: J1={t1:.4f}, J2={t2:.4f}, J3={t3}, J4={t4}")
+    #
+    # obj = ScaraKinematics()
+    #
+    # fk_res = obj.forward_kinematics(t1, t2, t3, t4, L1, L2, Z0, NN3)
+    #
+    # print(f"计算结果: {fk_res}")
+    # print("预期目标: {'x': 1324.9369, 'y': -419.5327, 'z': -2.72, 'r': 0.0, 'config': 'elbow_up'}")
+    #
+    # ik_res = obj.inverse_kinematics_v2(1324.9369, -419.5327, -2.72, 0.0, L1, L2, Z0, NN3)
+    # print(f"逆解结果：{ik_res}")
 
-    obj = ScaraKinematics()
+    l1 = 850.0
+    l2 = 650.0
+    z0 = 0.0
+    nn3 = 0.05
 
-    fk_res = obj.forward_kinematics(t1, t2, t3, t4, L1, L2, Z0, NN3)
 
-    print(f"计算结果: {fk_res}")
-    print("预期目标: {'x': 1324.9369, 'y': -419.5327, 'z': -2.72, 'r': 0.0, 'config': 'elbow_up'}")
+    def prepare_params_for_camera(point_config):
+        """
+        将配置点转换为相机需要的格式 (X, Y, Z, World_R)
+        :param point_config: 包含 coords=[x,y,z,r] 和 config='elbow_up' 的字典
+        """
+        coords = point_config.get("coords", [0, 0, 0, 0])
+        xe, ye, ze, te = coords
+        cfg_type = point_config.get("config", "elbow_up")  # 默认为 up
 
-    ik_res = obj.inverse_kinematics_v2(1324.9369, -419.5327, -2.72, 0.0, L1, L2, Z0, NN3)
-    print(f"逆解结果：{ik_res}")
+        # 1. 逆解计算 J1, J2
+        # 注意：te 此时是相对角度 (电机角度)
+        ik_res = ScaraKinematics.inverse_kinematics_v2(
+            xe, ye, ze, te,
+            l1, l2, z0, nn3,
+            config_type=cfg_type
+        )
+
+        if not ik_res:
+            logger.error("相机参数准备失败：逆解无解")
+            return None
+
+        j1 = ik_res['the1']
+        j2 = ik_res['the2']
+        j4_relative = ik_res['th4']  # 即传入的 te
+
+        # 2. 计算世界绝对角度
+        # World_R = J1 + J2 + J4_relative
+        world_r = j1 + j2 + j4_relative
+
+        # 归一化 (可选)
+        while world_r > 180: world_r -= 360
+        while world_r <= -180: world_r += 360
+
+        return [xe, ye, ze, world_r]
+
+
+    def process_camera_result_to_plc_data(camera_result_coords, current_j2):
+        """
+        将相机返回的绝对坐标数据，转换为 PLC 可用的相对角度数据
+        :param camera_result_coords: [x, y, z, world_r]
+        :return: 包含相对角度的目标点字典
+        """
+        target_x, target_y, target_z, target_world_r = camera_result_coords
+
+        # 1. 获取当前机械臂状态 (用于智能决策姿态)
+        # 假设 self.last_joint_status = [j1, j2, j3, j4]
+        # current_j2 = self.last_joint_status[1]
+
+        # 2. 智能逆解 (自动决定是 Up 还是 Down)
+        # 注意：这里传入的 te 参数暂时不重要，因为我们只需要 J1 和 J2
+        # 我们随便传个 0，反正后面会重新算 J4
+        best_ik = ScaraKinematics.calculate_best_inverse_kinematics(
+            target_x, target_y, target_z, 0,  # te 传 0
+            l1, l2, z0, nn3,
+            current_j2=current_j2  # 关键：传入当前角度做参考
+        )
+
+        if not best_ik:
+            logger.error(f"视觉点不可达: {camera_result_coords}")
+            return None
+
+        # 3. 获取最优解的 J1, J2
+        j1_new = best_ik['the1']
+        j2_new = best_ik['the2']
+
+        # 4. 反算 J4 相对角度 (电机角度)
+        # 调用之前写的辅助函数: J4 = World_R - (J1 + J2)
+        j4_relative_new = calculate_j4_from_world_angle(
+            j1_new, j2_new, target_world_r
+        )
+
+        # 5. 组装结果
+        # 注意：这里我们算出了 config，最好把它记下来，传给 send_coords_batch
+        # 这样插值的时候也会遵循这个 config
+        final_point = {
+            "name": "Vision_Target",
+            "coords": [target_x, target_y, target_z, j4_relative_new],
+            "config": best_ik['config'],  # 'elbow_up' 或 'elbow_down'
+            "photo": 0
+        }
+
+        logger.info(f"视觉解算结果: Config={best_ik['config']}, J4电机角度={j4_relative_new:.2f}")
+        return final_point
+
+
+    def calculate_j4_from_world_angle(j1, j2, target_world_r):
+        """
+        根据给定的 J1, J2 和目标世界角度，反算 J4 电机角度
+        公式: J4 = World_R - (J1 + J2)
+        """
+        # 1. 基础反算
+        j4 = target_world_r - (j1 + j2)
+
+        # 2. 归一化处理 (限制在 -180 到 180 之间)
+        # 这一步非常重要，确保电机走最短路径，且数值符合常规逻辑
+        while j4 > 180:
+            j4 -= 360
+        while j4 <= -180:
+            j4 += 360
+
+        return j4
+
+    print("坐标(146.21,879.29,20.0, -55.24) -> 关节(36.80, 108.49, 20.00, -55.24)")
+    point = {'name': 'Teach_P1', 'coords': [146.21, 879.29, 20.0, -55.24], 'photo': 1, 'config': 'elbow_up'}
+    camera_coords = point.get('coords')
+    config = point.get('config')
+    camera_prepare_coords = prepare_params_for_camera({"coords": camera_coords, "config": config})
+    print(camera_prepare_coords)
+
+    coords = [146.21, 879.29, 20.0, 90.05642858130287]
+    relative_point = process_camera_result_to_plc_data(coords, 879.29)
+    relative_point["name"] = f"Vision_P{0 + 1}"
+
+    print(relative_point)
 
     sys.exit(1)

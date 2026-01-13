@@ -125,7 +125,13 @@ class ConfigEditorUI(QMainWindow):
         # Tab 2: 动作流程编辑
         self.tab_process = QWidget()
         self.init_process_tab()
-        tabs.addTab(self.tab_process, "动作流程(Process)")
+        # tabs.addTab(self.tab_process, "动作流程(Process)")
+        tabs.addTab(self.tab_process, "动作流程配置")
+
+        # Tab 3: 产品配置 ===
+        self.tab_product = QWidget()
+        self.init_product_tab()
+        tabs.addTab(self.tab_product, "产品配置")
 
         return tabs
 
@@ -267,6 +273,69 @@ class ConfigEditorUI(QMainWindow):
         layout.addLayout(left_layout, 1)
         layout.addLayout(right_layout, 3)
 
+    def init_product_tab(self):
+        """初始化产品配置 Tab (重构版)"""
+        layout = QVBoxLayout(self.tab_product)
+        layout.setSpacing(20)
+
+        # === 1. 当前生产产品 (只读展示) ===
+        grp_current = QGroupBox("当前生产产品")
+        layout_current = QVBoxLayout(grp_current)
+
+        # 使用黄色大号字体显示
+        self.lbl_current_product = QLabel("未设置")
+        self.lbl_current_product.setAlignment(Qt.AlignCenter)
+        self.lbl_current_product.setStyleSheet("""
+            background-color: #333333; 
+            color: #FFEB3B; 
+            font-size: 24pt; 
+            font-weight: bold; 
+            border-radius: 5px; 
+            padding: 10px;
+        """)
+        layout_current.addWidget(self.lbl_current_product)
+        layout.addWidget(grp_current)
+
+        # === 2. 产品型号切换 (操作区) ===
+        grp_switch = QGroupBox("产品型号切换")
+        layout_switch = QHBoxLayout(grp_switch)
+
+        self.combo_product = QComboBox()
+        self.combo_product.setMinimumHeight(40)
+        self.combo_product.setStyleSheet("font-size: 12pt;")
+
+        btn_switch = QPushButton("确认切换")
+        btn_switch.setMinimumHeight(40)
+        btn_switch.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; font-size: 11pt;")
+        btn_switch.clicked.connect(self.switch_product_model)  # 连接到新的切换函数
+
+        layout_switch.addWidget(self.combo_product, 3)  # 比例 3
+        layout_switch.addWidget(btn_switch, 1)  # 比例 1
+        layout.addWidget(grp_switch)
+
+        # === 3. 型号管理 (增删配置) ===
+        grp_manage = QGroupBox("型号管理")
+        layout_manage = QHBoxLayout(grp_manage)
+
+        btn_add = QPushButton("添加新型号")
+        btn_del = QPushButton("删除选中型号")
+        # 仅仅保存列表变更，不切换型号
+        btn_save_list = QPushButton("保存列表变更")
+
+        btn_add.setStyleSheet("background-color: #2196F3; color: white;")
+        btn_del.setStyleSheet("background-color: #F44336; color: white;")
+
+        btn_add.clicked.connect(self.add_product_model)
+        btn_del.clicked.connect(self.delete_product_model)
+        btn_save_list.clicked.connect(self.save_product_list_only)
+
+        layout_manage.addWidget(btn_add)
+        layout_manage.addWidget(btn_del)
+        layout_manage.addWidget(btn_save_list)
+        layout.addWidget(grp_manage)
+
+        layout.addStretch()
+
     # === 逻辑处理部分 ===
     def _set_row_elbow_combo(self, row, current_val="elbow_up"):
         """辅助函数：给指定行设置姿态下拉框"""
@@ -369,6 +438,23 @@ class ConfigEditorUI(QMainWindow):
             processes = self.config_data.get('processes', {})
             for pid in processes.keys():
                 self.list_processes.addItem(pid)
+
+            # === 加载产品配置 ===
+            prod_cfg = self.config_data.get('product_config', {})
+            model_list = prod_cfg.get('model_list', ["PN123456", "PN14535"])
+            current_model = prod_cfg.get('current_model', "Unknown")
+
+            # 1. 更新顶部大标签
+            self.lbl_current_product.setText(current_model)
+
+            # 2. 更新下拉框
+            self.combo_product.clear()
+            self.combo_product.addItems(model_list)
+
+            # 下拉框默认选中当前的，方便用户确认
+            idx = self.combo_product.findText(current_model)
+            if idx >= 0:
+                self.combo_product.setCurrentIndex(idx)
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载配置文件失败: {e}")
@@ -700,6 +786,117 @@ class ConfigEditorUI(QMainWindow):
         #     self.monitor_thread.stop()
         self.ui_timer.stop()
         event.accept()
+
+    # === 产品配置相关槽函数 ===
+    def switch_product_model(self):
+        """核心功能：切换产品型号"""
+        selected_model = self.combo_product.currentText()
+        current_model = self.lbl_current_product.text()
+
+        # 1. 检查是否真的变化了
+        if selected_model == current_model:
+            QMessageBox.information(self, "提示", "当前已经是该型号，无需切换。")
+            return
+
+        # 2. 弹出警告对话框
+        reply = QMessageBox.warning(
+            self,
+            "切换确认",
+            f"确定要将生产型号切换为 [{selected_model}] 吗？\n\n注意：切换后程序需要重启以加载新产品的视觉和点位参数！",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            # 3. 更新内存数据
+            if 'product_config' not in self.config_data:
+                self.config_data['product_config'] = {}
+
+            self.config_data['product_config']['current_model'] = selected_model
+
+            # 确保列表也同步保存（防止用户添加了没保存直接点切换）
+            model_list = [self.combo_product.itemText(i) for i in range(self.combo_product.count())]
+            self.config_data['product_config']['model_list'] = model_list
+
+            # 4. 写入文件
+            self._write_to_file()
+
+            # 5. 更新界面显示
+            self.lbl_current_product.setText(selected_model)
+
+            # 6. 提示重启
+            QMessageBox.information(self, "切换成功", "产品型号已更新。\n\n请务必重启程序以确保所有参数生效！")
+
+            # 可选：通知后台 (虽然提示了重启，但如果是热加载架构，也可以通知)
+            if self.controller:
+                self.controller.reload_config()
+
+    def save_product_list_only(self):
+        """只保存列表的增删，不改变当前型号"""
+        model_list = [self.combo_product.itemText(i) for i in range(self.combo_product.count())]
+
+        if 'product_config' not in self.config_data:
+            self.config_data['product_config'] = {}
+
+        self.config_data['product_config']['model_list'] = model_list
+        self._write_to_file()
+        QMessageBox.information(self, "成功", "型号列表已保存")
+
+    def add_product_model(self):
+        """添加新产品型号"""
+        text, ok = QInputDialog.getText(self, "添加型号", "请输入新的产品型号 (例如 PN88888):")
+        if ok and text:
+            text = text.strip()
+            if not text: return
+
+            if self.combo_product.findText(text) >= 0:
+                QMessageBox.warning(self, "提示", "该型号已存在！")
+                return
+
+            self.combo_product.addItem(text)
+            self.combo_product.setCurrentIndex(self.combo_product.count() - 1)
+
+    def delete_product_model(self):
+        """删除当前选中的型号"""
+        curr_idx = self.combo_product.currentIndex()
+        if curr_idx < 0: return
+
+        txt = self.combo_product.currentText()
+
+        # 保护：不能删除当前正在生产的型号
+        if txt == self.lbl_current_product.text():
+            QMessageBox.warning(self, "禁止删除", f"[{txt}] 正在生产中，无法删除！\n请先切换到其他型号。")
+            return
+
+        reply = QMessageBox.question(self, "确认删除", f"确定要删除型号 [{txt}] 吗？",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.combo_product.removeItem(curr_idx)
+
+    def save_product_config(self):
+        """保存产品配置到 JSON"""
+        # 1. 获取列表中的所有型号
+        model_list = []
+        for i in range(self.combo_product.count()):
+            model_list.append(self.combo_product.itemText(i))
+
+        # 2. 获取当前选中的型号
+        current_model = self.combo_product.currentText()
+
+        # 3. 更新内存数据
+        if 'product_config' not in self.config_data:
+            self.config_data['product_config'] = {}
+
+        self.config_data['product_config']['model_list'] = model_list
+        self.config_data['product_config']['current_model'] = current_model
+
+        # 4. 写入文件
+        self._write_to_file()
+
+        # 5. 通知后台
+        if self.controller:
+            self.controller.reload_config()  # 假设 Controller 有处理这个新字段的逻辑
+
+        QMessageBox.information(self, "成功", f"产品配置已保存\n当前型号: {current_model}")
 
 
 # === 测试入口 ===

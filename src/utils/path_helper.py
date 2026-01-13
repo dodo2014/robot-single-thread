@@ -9,10 +9,10 @@ def get_base_path() -> Path:
     获取应用程序基础路径
     支持：开发模式、Nuitka打包、PyInstaller打包
     """
-    print(f"[Debug] sys.frozen: {getattr(sys, 'frozen', 'False')}")
-    print(f"[Debug] sys.executable: {sys.executable}")
-    print(f"[Debug] sys.argv[0]: {sys.argv[0]}")
-    print(f"[Debug] Env NUITKA_ONEFILE_BINARY: {os.environ.get('NUITKA_ONEFILE_BINARY')}")
+    # print(f"[Debug] sys.frozen: {getattr(sys, 'frozen', 'False')}")
+    # print(f"[Debug] sys.executable: {sys.executable}")
+    # print(f"[Debug] sys.argv[0]: {sys.argv[0]}")
+    # print(f"[Debug] Env NUITKA_ONEFILE_BINARY: {os.environ.get('NUITKA_ONEFILE_BINARY')}")
 
     nuitka_binary = os.environ.get("NUITKA_ONEFILE_BINARY")
     if nuitka_binary:
@@ -68,3 +68,8 @@ def get_logs_dir() -> Path:
     logs_dir = get_base_path() / "logs"
     logs_dir.mkdir(exist_ok=True)
     return logs_dir
+
+def get_camera_img_dir() -> Path:
+    img_dir = get_base_path() / "camera_img"
+    img_dir.mkdir(exist_ok=True)
+    return img_dir

@@ -12,6 +12,7 @@ dependencies = [
     "pyqt5-qt5==5.15.2",  # 强制锁定这个子依赖的版本
     "pyorbbecsdk2>=2.0.15",
     "scipy>=1.16.3",
+    "pybind11>=3.0.1",
 ]
 
 [dependency-groups]
