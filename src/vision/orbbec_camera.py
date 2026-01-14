@@ -18,6 +18,11 @@ class OrbbecCameraDevice:
     def _setup_streams(self):
         """修复后的配置函数：使用 OBSensorType"""
         try:
+            # 先检查是否有设备，没设备直接跳过配置
+            if self.ctx.query_devices().get_count() == 0:
+                logger.warning("No Orbbec device found during setup_streams.")
+                return
+
             # 1. 获取彩色传感器(COLOR_SENSOR)的配置列表
             color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
             color_profile = None

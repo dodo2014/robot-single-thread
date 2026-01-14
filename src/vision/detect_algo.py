@@ -52,9 +52,12 @@ class DetectAlgoService:
         """抽取出预热逻辑"""
         # 抛弃前 10-20 帧，让自动曝光稳定，并强制触发 SW_MODE 的查找表计算
         logger.info("Warming up camera...")
-        for _ in range(20):
-            self.device.get_frames(timeout_ms=500)
-        logger.info("Camera is ready.")
+        try:
+            for _ in range(20):
+                self.device.get_frames(timeout_ms=100)
+            logger.info("Camera is ready.")
+        except Exception as e:
+            logger.warning(f"Camera warm-up interrupted: {e}")
 
     def _save_worker(self):
         """后台存图线程函数"""
@@ -198,6 +201,17 @@ class DetectAlgoService:
         self.save_thread.join(timeout=3.0)
         self.device.disconnect()
 
+    def update_product(self, new_product_no):
+        """切换产品型号，重新加载算法配置"""
+        if self.product_no == new_product_no:
+            return
+
+        logger.info(f"Switching algorithm product to {new_product_no}...")
+        self.product_no = new_product_no
+
+        # 重新初始化 C++ 算法 (假设 C++ 有 reinit 接口，或者重新 new)
+        # self.algo.initialize(self.product_no)
+        logger.info("Algorithm updated.")
 
 def main():
     # 初始化业务类

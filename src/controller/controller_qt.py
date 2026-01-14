@@ -30,10 +30,7 @@ class Controller(QThread):
         # 启动时尝试加载上次的数据
         self.load_vision_file()
 
-        # 获取当前产品型号 (假设在 config_manager 中有)
-        current_product = self.cfg_manager.get_current_product_model()
-        # 初始化视觉服务单例
-        self.vision_service = DetectAlgoService(product_no=current_product)
+        self.vision_service = None
 
         self.origin_point = self.cfg_manager.get_origin_params()  # 获取原点配置
         self.last_motion_end_point = self.origin_point  # 定义【全局当前坐标记录】，初始化为原点
@@ -77,6 +74,15 @@ class Controller(QThread):
             logger.error("PLC 连接失败，线程退出")
             return  # 连接失败直接退出线程
 
+        logger.info("正在启动视觉服务...")
+        try:
+            # 获取当前产品型号
+            current_product = self.cfg_manager.get_current_product_model()
+            self.vision_service = DetectAlgoService(product_no=current_product)
+        except Exception as e:
+            logger.error(f"视觉服务启动失败: {e}")
+            # 即使失败，Controller 也要继续运行，不能退出
+
         self.running = True  # 标记运行
 
         while self.running:
@@ -115,6 +121,11 @@ class Controller(QThread):
         self.l2 = self.robot_params.get('l2')
         self.z0 = self.robot_params.get('z0')
         self.nn3 = self.robot_params.get('nn3')
+
+        # 更新视觉服务的产品型号
+        new_model = self.cfg_manager.get_current_product_model()
+        if self.vision_service:
+            self.vision_service.update_product(new_model)
 
     def check_estop(self):
         """
@@ -569,6 +580,10 @@ class Controller(QThread):
         retrive，表示coords中返回两个坐标p_r0，p_r1，移动到p_r1处进行抓取
         """
         try:
+            if not self.vision_service:
+                logger.error("视觉服务未就绪")
+                return {"res": "ng", "coords": [], "trigger": ""}
+
             logger.info(f"camera_coords >>>>>>>> : {camera_coords}, loading : {loading}")
             camera_prepare_coords = self.prepare_params_for_camera({"coords": camera_coords, "config": config})
             logger.info(f"camera_prepare_coords >>>>>> : {camera_prepare_coords}")
