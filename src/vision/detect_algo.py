@@ -39,14 +39,16 @@ class DetectAlgoService:
 
         # 初始化相机并预热
         logger.info("Initializing camera hardware...")
-        success, msg = self.device.connect()
-        # if not success:
-        #     raise RuntimeError(f"Failed to start camera during init: {msg}")
-        if not success:
-            logger.warning(f"Camera init failed: {msg}. Will retry on first execution.")
-        else:
-            # 只有连接成功才预热
-            self._warm_up()
+        try:
+            success, msg = self.device.connect()
+            if not success:
+                # 启动时没插相机，只警告，不抛异常，不退出
+                logger.warning(f"Camera init failed: {msg}. Hot-plug supported - waiting for device..")
+            else:
+                # 只有连接成功才预热
+                self._warm_up()
+        except Exception as e:
+            logger.error(f"Unexpected error during camera init: {e}")
 
     def _warm_up(self):
         """抽取出预热逻辑"""

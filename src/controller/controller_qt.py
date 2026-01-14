@@ -79,6 +79,7 @@ class Controller(QThread):
             # 获取当前产品型号
             current_product = self.cfg_manager.get_current_product_model()
             self.vision_service = DetectAlgoService(product_no=current_product)
+            logger.info("视觉服务启动成功")
         except Exception as e:
             logger.error(f"视觉服务启动失败: {e}")
             # 即使失败，Controller 也要继续运行，不能退出
@@ -156,8 +157,10 @@ class Controller(QThread):
         realtime_point = self.get_realtime_point()
         logger.info(f"current point: {realtime_point}")
 
-        """执行一次完整的轮询和处理"""
+        self.vision_service.execute_detection(ptype=1)
 
+        """执行一次完整的轮询和处理"""
+        # 获取急停地址位的数据
         e_stop_regs = self.plc.read_holding_registers(self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR), 1)
         logger.info(
             f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
