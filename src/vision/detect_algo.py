@@ -6,6 +6,7 @@ import time
 import queue
 import threading
 import traceback
+from pyorbbecsdk import (OBFormat)
 from src.vision.orbbec_camera import OrbbecCameraDevice
 from src.utils.path_helper import get_camera_img_dir
 from src.utils import logger
@@ -15,6 +16,7 @@ try:
     import cpp_algo
 except ImportError:
     logger.warning("Warning: cpp_algo module not found.")
+
 
 class DetectAlgoService:
     def __init__(self, product_no: str, save_dir: str = get_camera_img_dir()):
@@ -45,7 +47,6 @@ class DetectAlgoService:
         else:
             # 只有连接成功才预热
             self._warm_up()
-
 
     def _warm_up(self):
         """抽取出预热逻辑"""
@@ -124,21 +125,42 @@ class DetectAlgoService:
                 continue
 
             try:
-                # 数据转换 (Numpy 用于本地保存)
-                # color_data = np.asanyarray(color_frame.get_data()).reshape((720, 1280, 3))
-                # depth_data = np.asanyarray(depth_frame.get_data()).reshape((720, 1280))
-
                 # 彩色图转换: RGB888 每个像素 3 字节 (uint8)
                 # color_frame.get_data() 是原始 buffer
                 # color_data = np.frombuffer(color_frame.get_data(), dtype=np.uint8)
                 # color_img = color_data.reshape((720, 1280, 3))
-                color_img = np.frombuffer(color_frame.get_data(), dtype=np.uint8).reshape((720, 1280, 3)).copy()
+                # color_img = np.frombuffer(color_frame.get_data(), dtype=np.uint8).reshape(
+                #     (self.height, self.width, self.channel)).copy()
+
+                f_width = color_frame.get_width()  # 动态获取当前帧的宽度
+                f_height = color_frame.get_height()  # 动态获取当前帧的高度
+
+                color_format = color_frame.get_format()
+                raw_data = np.frombuffer(color_frame.get_data(), dtype=np.uint8)
+
+                if color_format == OBFormat.MJPG:
+                    # 如果是 MJPG，使用 OpenCV 解码成 BGR
+                    bgr_img = cv2.imdecode(raw_data, cv2.IMREAD_COLOR)
+                    if bgr_img is None:
+                        raise ValueError("MJPG decode failed")
+                    # 转换为 RGB (因为你之前的逻辑是存图前转 BGR，或者算法需要 RGB)
+                    color_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
+                elif color_format == OBFormat.RGB:
+                    # 只有格式确实是 RGB 时才能直接 reshape
+                    color_img = raw_data.reshape((f_height, f_width, 3)).copy()
+                else:
+                    # 处理其他可能的格式（如 YUYV）
+                    # 这里建议打印一下当前的格式，方便调试
+                    print(f"Unsupported format for direct reshape: {color_format}")
+                    # 这种情况下通常需要专门的转换函数
+                    return {"code": -1, "err_msg": f"Unsupported format {color_format}"}
 
                 # 深度图转换: Y16 每个像素 2 字节 (uint16)
                 # 使用 np.frombuffer 并指定 dtype=np.uint16
-                # depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16)
-                # depth_img = depth_data.reshape((720, 1280))
-                depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((720, 1280)).copy()
+                depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16)
+                depth_img = depth_data.reshape((f_height, f_width)).copy()
+                # depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
+                #     (self.height, self.width)).copy()
 
                 # 本地持久化
                 # self._save_to_local(color_img, depth_img)
@@ -151,7 +173,6 @@ class DetectAlgoService:
                     logger.warning("Warning: Save queue full, dropping image.")
                 except Exception as e:
                     logger.error(f"Error in image save queue: {e}")
-
 
                 # 5. 二进制处理 (传递给 C++ 算法)
                 # 直接获取原始内存 Buffer 的 bytes 形式

@@ -4,7 +4,7 @@ from pyorbbecsdk import (Pipeline, Config, Context, OBError,
 from src.utils import logger
 
 class OrbbecCameraDevice:
-    def __init__(self, width=1280, height=720, fps=30):
+    def __init__(self, width=1280, height=720, fps=15):
         self.ctx = Context()
         self.pipeline = Pipeline()  # 提前初始化 pipeline 以便获取 profile
         self.config = Config()
@@ -19,18 +19,27 @@ class OrbbecCameraDevice:
         """修复后的配置函数：使用 OBSensorType"""
         try:
             # 1. 获取彩色传感器(COLOR_SENSOR)的配置列表
+            color_profile = OBStreamType.COLOR_STREAM
+            color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+
             try:
-                color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
                 # 尝试查找指定的分辨率和格式
                 # 注意：如果 1280x720 不支持，这里会报错，所以加了 try-except
                 color_profile = color_profiles.get_video_stream_profile(
-                    self.width, self.height, OBFormat.RGB, self.fps
+                    self.width, self.height, OBFormat.MJPG, self.fps
                 )
                 self.config.enable_stream(color_profile)
-                logger.info(f"Color stream enabled: {self.width}x{self.height} @{self.fps}fps")
-            except Exception as e:
-                logger.warning(f"Warning: Specific Color profile not supported ({e}), using default.")
-                self.config.enable_stream(OBStreamType.COLOR_STREAM)
+                logger.info(f"MJPG format for Color stream enabled: {self.width}x{self.height} @{self.fps}fps")
+            except:
+                # 如果没有 MJPG，再尝试 RGB
+                color_profile = color_profiles.get_video_stream_profile(
+                    self.width, self.height, OBFormat.RGB, self.fps
+                )
+                logger.info(f"RGB format for Color stream enabled: {self.width}x{self.height} @{self.fps}fps")
+            # except Exception as e:
+            #     logger.warning(f"Warning: Specific Color profile not supported ({e}), using default.")
+            #     self.config.enable_stream(OBStreamType.COLOR_STREAM)
+            self.config.enable_stream(color_profile)
 
             # 2. 获取深度传感器(DEPTH_SENSOR)的配置列表
             try:
@@ -51,8 +60,9 @@ class OrbbecCameraDevice:
             self.config.set_align_mode(OBAlignMode.SW_MODE)
 
         except OBError as e:
-            # print(f"SDK Error during setup: {e}")
-            logger.error(f"SDK Error during setup: {e}")
+            logger.error(f"SDK OBError during setup: {e} \n traceback: {traceback.format_exc()}")
+        except Exception as e:
+            logger.error(f"SDK Error during setup: {e} \n traceback: {traceback.format_exc()}")
 
     def connect(self):
         """启动流水线"""
