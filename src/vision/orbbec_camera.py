@@ -19,27 +19,28 @@ class OrbbecCameraDevice:
         """修复后的配置函数：使用 OBSensorType"""
         try:
             # 1. 获取彩色传感器(COLOR_SENSOR)的配置列表
-            color_profile = OBStreamType.COLOR_STREAM
             color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+            color_profile = None
 
-            try:
-                # 尝试查找指定的分辨率和格式
-                # 注意：如果 1280x720 不支持，这里会报错，所以加了 try-except
-                color_profile = color_profiles.get_video_stream_profile(
-                    self.width, self.height, OBFormat.MJPG, self.fps
-                )
+            formats_to_try = [OBFormat.MJPG, OBFormat.RGB]
+            # 尝试队列：MJPG -> RGB -> 默认, 1280*720不支持RGB, 优先使用MJPG
+            for fmt in formats_to_try:
+                try:
+                    color_profile = color_profiles.get_video_stream_profile(
+                        self.width, self.height, fmt, self.fps
+                    )
+                    if color_profile:
+                        logger.info(f"Matched Color profile: {fmt.name} {self.width}x{self.height} @{self.fps}fps")
+                        break
+                except:
+                    continue
+
+            if color_profile:
                 self.config.enable_stream(color_profile)
-                logger.info(f"MJPG format for Color stream enabled: {self.width}x{self.height} @{self.fps}fps")
-            except:
-                # 如果没有 MJPG，再尝试 RGB
-                color_profile = color_profiles.get_video_stream_profile(
-                    self.width, self.height, OBFormat.RGB, self.fps
-                )
-                logger.info(f"RGB format for Color stream enabled: {self.width}x{self.height} @{self.fps}fps")
-            # except Exception as e:
-            #     logger.warning(f"Warning: Specific Color profile not supported ({e}), using default.")
-            #     self.config.enable_stream(OBStreamType.COLOR_STREAM)
-            self.config.enable_stream(color_profile)
+            else:
+                logger.warning("No exact Color profile match! Using default COLOR_STREAM.")
+                self.config.enable_stream(OBStreamType.COLOR_STREAM)
+
 
             # 2. 获取深度传感器(DEPTH_SENSOR)的配置列表
             try:
