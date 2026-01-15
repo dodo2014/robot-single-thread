@@ -73,3 +73,9 @@ last_process_addr_map = {
     0x40099: 0x40098,
     0x4009C: 0x4008F,
 }
+
+# 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
+photo_type_normal = 1 # 普通拍照
+photo_type_loading = 2 # 上料
+photo_type_unloading = 3 # 下料
+photo_type_aluminum = 4  # 铝屑识别

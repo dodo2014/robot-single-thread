@@ -8,6 +8,7 @@ import threading
 import traceback
 from pyorbbecsdk import (OBFormat)
 from src.vision.orbbec_camera import OrbbecCameraDevice
+from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
 from src.utils.path_helper import get_camera_img_dir
 from src.utils import logger
 
@@ -30,6 +31,11 @@ class DetectAlgoService:
         # init_res = self.algo.initialize(self.product_no)
         # if init_res.get("code") != 0:
         #     raise RuntimeError(f"Algorithm Init Failed: {init_res}")
+
+        self.detector = RGBDDetector()
+        detector_init_res = self.detector.init(product_no)
+        if detector_init_res.get("code") != 0:
+            raise RuntimeError(f"Algorithm Init Failed: {detector_init_res}")
 
         # 异步存图队列与线程
         self.save_queue = queue.Queue(maxsize=100)  # 限制队列长度防止内存溢出
@@ -107,7 +113,17 @@ class DetectAlgoService:
     def execute_detection(self, ptype: int):
         """
         对外公开的同步业务接口
-        ptype: 1-普通, 2-上料, 3-下料, 4-铝屑
+        :param ptype, 1-普通, 2-上料, 3-下料, 4-铝屑
+        :return
+            {
+                "code": 0,    #  正常返回0，异常返回其他值
+                "result": {
+                    "ptype"：1， # 类型
+                    "coords": [x,y,z,r] # 坐标参数
+                    "ok": 1 # 检测结果，ok/1，ng/2
+                }
+                "err_msg": ""   # 异常日志，0返回空
+            }
         """
         last_err = ""
 
@@ -187,7 +203,11 @@ class DetectAlgoService:
                 # 6. 调用 C++ 算法
                 # result = self.algo.detect(ptype, rgb_binary, depth_binary)
                 # return result
-                return {"code": 0, "result": {"ok": 1, "coords": [0, 0, 0, 0]}, "err_msg": ""}
+
+                result = self.detector.detect(ptype, color_img, depth_img)
+                return result
+
+                # return {"code": 0, "result": {"ok": 1, "coords": [0, 0, 0, 0]}, "err_msg": ""}
 
             except Exception as e:
                 last_err = str(e)
@@ -213,20 +233,22 @@ class DetectAlgoService:
 
         # 重新初始化 C++ 算法 (假设 C++ 有 reinit 接口，或者重新 new)
         # self.algo.initialize(self.product_no)
+
+        self.detector.init(self.product_no)
         logger.info("Algorithm updated.")
 
 def main():
     # 初始化业务类
-    service = DetectAlgoService(product_no="PN123456")
+    service = DetectAlgoService(product_no="M001")
 
     try:
         # 上位机发起一次同步调用
         # ptype: 1 (物料识别)
-        for i in range(50):
+        for i in range(2):
             start_time = time.time()
             print(f"{i} time Starting detection...")
             response = service.execute_detection(ptype=1)
-
+            print(response)
             # 处理结果
             if response["code"] == 0:
                 res = response["result"]

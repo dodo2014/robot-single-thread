@@ -5,7 +5,8 @@ import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGroupBox, QFormLayout, QLabel, QLineEdit, QPushButton,
                              QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-                             QSplitter, QListWidget, QMessageBox, QComboBox, QInputDialog, QFrame)
+                             QSplitter, QListWidget, QMessageBox, QComboBox, QInputDialog,
+                             QTreeWidget, QTreeWidgetItem, QFrame)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from src.utils.config_manager import CONFIG_FILE
 
@@ -185,9 +186,23 @@ class ConfigEditorUI(QMainWindow):
         left_layout = QVBoxLayout()
         left_layout.addWidget(QLabel("动作列表 (Process ID/H地址)"))
 
-        self.list_processes = QListWidget()
-        self.list_processes.currentRowChanged.connect(self.on_process_selected)
-        left_layout.addWidget(self.list_processes)
+        # self.list_processes = QListWidget()
+        # self.list_processes.currentRowChanged.connect(self.on_process_selected)
+        # left_layout.addWidget(self.list_processes)
+
+        # 【修改】使用 QTreeWidget 替代 QListWidget 以支持多列显示
+        self.tree_processes = QTreeWidget()
+        self.tree_processes.setColumnCount(2)
+        self.tree_processes.setHeaderLabels(["H地址 (Key)", "D地址"])
+        self.tree_processes.setRootIsDecorated(False)  # 隐藏展开小箭头，使其看起来像列表
+
+        # 设置列宽比例 (H地址窄一点，D地址宽一点，或者平分)
+        self.tree_processes.setColumnWidth(0, 120)
+
+        # 连接信号：注意信号变了，变成 currentItemChanged
+        self.tree_processes.currentItemChanged.connect(self.on_process_selected)
+
+        left_layout.addWidget(self.tree_processes)
 
         # 新增：动作列表的操作按钮
         proc_btn_layout = QHBoxLayout()
@@ -433,11 +448,38 @@ class ConfigEditorUI(QMainWindow):
             traj = self.config_data.get('trajectory_params', {})
             self.edit_accel.setText(str(traj.get('acceleration_time', '')))
 
-            # 填充动作列表
-            self.list_processes.clear()
+            # === 填充动作列表 ===
+            # self.list_processes.clear()
+            # processes = self.config_data.get('processes', {})
+            # for pid in processes.keys():
+            #     self.list_processes.addItem(pid)
+
+            self.tree_processes.clear()
             processes = self.config_data.get('processes', {})
-            for pid in processes.keys():
-                self.list_processes.addItem(pid)
+
+            # 排序
+            try:
+                sorted_keys = sorted(processes.keys(), key=lambda x: int(x, 16))
+            except:
+                sorted_keys = sorted(processes.keys())
+
+            for pid in sorted_keys:
+                # 1. 获取/计算 D 地址
+                proc_data = processes[pid]
+                d_addr = proc_data.get('d_addr')
+
+                if d_addr is None:
+                    # 如果配置里没存，实时计算
+                    try:
+                        h_val = int(pid, 16)
+                        d_addr = self.map_modbus_address(h_val)
+                    except:
+                        d_addr = "-"
+
+                # 2. 创建 TreeItem
+                # 第一列设为 pid (H地址)，第二列设为 d_addr
+                item = QTreeWidgetItem([str(pid), str(d_addr)])
+                self.tree_processes.addTopLevelItem(item)
 
             # === 加载产品配置 ===
             prod_cfg = self.config_data.get('product_config', {})
@@ -459,17 +501,20 @@ class ConfigEditorUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载配置文件失败: {e}")
 
-    def on_process_selected(self, row):
-        """刷新右侧显示"""
-        if row < 0:
-            # 如果没有选中项，清空右侧
-            self.lbl_proc_name.clear()
-            self.lbl_proc_type.clear()
-            self.lbl_proc_d_addr.clear()
-            self.table_points.setRowCount(0)
-            return
+    # def on_process_selected(self, row):
+    #     """刷新右侧显示"""
+    #     if row < 0:
+    #         # 如果没有选中项，清空右侧
+    #         self.lbl_proc_name.clear()
+    #         self.lbl_proc_type.clear()
+    #         self.lbl_proc_d_addr.clear()
+    #         self.table_points.setRowCount(0)
+    #         return
+    #
+    #     pid = self.list_processes.item(row).text()
 
-        pid = self.list_processes.item(row).text()
+    def on_process_selected(self, current_item, previous_item):
+        pid = current_item.text(0)
         process_data = self.config_data['processes'].get(pid, {})
 
         self.lbl_proc_name.setText(process_data.get('name', ''))
@@ -529,6 +574,16 @@ class ConfigEditorUI(QMainWindow):
 
         self.table_points.setSortingEnabled(False)  # 表格通常不需要排序，容易乱序
 
+    # def on_process_selected_v1(self, current_item, previous_item):
+    #     if not current_item:
+    #         # 清空右侧
+    #         self.lbl_proc_name.clear()
+    #         self.lbl_proc_type.clear()
+    #         self.lbl_proc_d_addr.clear()
+    #         self.table_points.setRowCount(0)
+    #         return
+    #
+    #
 
     def add_process_item(self):
         """新增一个动作流程"""
@@ -542,10 +597,23 @@ class ConfigEditorUI(QMainWindow):
                 QMessageBox.warning(self, "错误", "该动作地址已存在！")
                 return
 
+            # 计算 D 地址
+            try:
+                h_val = int(text, 16)
+                d_val = self.map_modbus_address(h_val)
+            except:
+                d_val = 0
+
             # 2. 初始化数据结构
+            # new_process = {
+            #     "name": "新建动作流程",
+            #     "type": "standard",
+            #     "points": []
+            # }
             new_process = {
                 "name": "新建动作流程",
-                "type": "standard",
+                "type": "standard_move",
+                "d_addr": d_val,  # 默认存入
                 "points": []
             }
 
@@ -555,21 +623,36 @@ class ConfigEditorUI(QMainWindow):
             self.config_data['processes'][text] = new_process
 
             # 4. 更新 UI 列表
-            self.list_processes.addItem(text)
-            # 选中新添加的项
-            self.list_processes.setCurrentRow(self.list_processes.count() - 1)
+            # self.list_processes.addItem(text)
+            # # 选中新添加的项
+            # self.list_processes.setCurrentRow(self.list_processes.count() - 1)
+
+            # 更新 UI (TreeWidget)
+            item = QTreeWidgetItem([str(text), str(d_val)])
+            self.tree_processes.addTopLevelItem(item)
+
+            # 选中新项
+            self.tree_processes.setCurrentItem(item)
 
             # 5. 自动保存（可选，或者让用户点保存按钮）
             self._write_to_file()
 
     def delete_process_item(self):
         """删除当前选中的动作"""
-        row = self.list_processes.currentRow()
-        if row < 0:
+        # row = self.list_processes.currentRow()
+        # if row < 0:
+        #     QMessageBox.warning(self, "提示", "请先选择要删除的动作")
+        #     return
+        #
+        # pid = self.list_processes.item(row).text()
+
+        current_item = self.tree_processes.currentItem()
+        if not current_item:
             QMessageBox.warning(self, "提示", "请先选择要删除的动作")
             return
 
-        pid = self.list_processes.item(row).text()
+        # 获取 Key (第0列)
+        pid = current_item.text(0)
 
         # 二次确认
         reply = QMessageBox.question(self, "确认删除",
@@ -582,7 +665,11 @@ class ConfigEditorUI(QMainWindow):
                 del self.config_data['processes'][pid]
 
             # 2. 从 UI 移除
-            self.list_processes.takeItem(row)
+            # self.list_processes.takeItem(row)
+
+            # 需要先获取当前项的索引
+            index = self.tree_processes.indexOfTopLevelItem(current_item)
+            self.tree_processes.takeTopLevelItem(index)
 
             # 3. 自动保存
             self._write_to_file()
@@ -703,11 +790,17 @@ class ConfigEditorUI(QMainWindow):
 
     def save_current_process(self):
         """保存 Tab 2 的表格数据到 json"""
-        current_item = self.list_processes.currentItem()
+        # current_item = self.list_processes.currentItem()
+        current_item = self.tree_processes.currentItem()
         if not current_item:
             return
 
-        pid = current_item.text()
+        # pid = current_item.text()
+
+        # 以前是 current_item.text()
+        # 现在必须是 current_item.text(0)，表示获取第0列的文本
+        pid = current_item.text(0)
+
         new_points = []
 
         try:
@@ -734,6 +827,10 @@ class ConfigEditorUI(QMainWindow):
                 })
 
             # 更新内存数据
+            # 确保 pid 对应的字典存在
+            if pid not in self.config_data['processes']:
+                self.config_data['processes'][pid] = {}
+
             self.config_data['processes'][pid]['name'] = self.lbl_proc_name.text()
             self.config_data['processes'][pid]['type'] = self.lbl_proc_type.text()
 
@@ -754,6 +851,9 @@ class ConfigEditorUI(QMainWindow):
             QMessageBox.information(self, "成功", "动作已保存，并已通知后台生效")
         except ValueError as e:
             QMessageBox.warning(self, "错误", f"数据格式错误: {e}")
+        except Exception as e:
+            # 捕获其他未知异常，防止崩溃
+            QMessageBox.critical(self, "系统错误", f"保存失败: {str(e)}")
 
     def _write_to_file(self):
         with open(self.config_file, 'w', encoding='utf-8') as f:

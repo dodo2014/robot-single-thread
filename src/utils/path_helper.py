@@ -73,3 +73,7 @@ def get_camera_img_dir() -> Path:
     img_dir = get_base_path() / "camera_img"
     img_dir.mkdir(exist_ok=True)
     return img_dir
+
+def get_vision_detector_dir() -> Path:
+    vision_detector_dir = get_base_path() / "src/depthSegmentPython"
+    return vision_detector_dir

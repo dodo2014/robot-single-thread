@@ -602,10 +602,9 @@
     },
     "product_config": {
         "model_list": [
-            "PN123456",
-            "PN14535",
-            "ABC1169"
+            "M001",
+            "M002"
         ],
-        "current_model": "ABC1169"
+        "current_model": "M001"
     }
 }

@@ -157,7 +157,8 @@ class Controller(QThread):
         realtime_point = self.get_realtime_point()
         logger.info(f"current point: {realtime_point}")
 
-        self.vision_service.execute_detection(ptype=1)
+        # vision_result = self.vision_service.execute_detection(ptype=1)
+        # logger.info(f"vision result: {vision_result}")
 
         """执行一次完整的轮询和处理"""
         # 获取急停地址位的数据
@@ -236,6 +237,9 @@ class Controller(QThread):
             if current_addr in handler_map:
                 # 调用对应的处理方法
                 handler_map[current_addr](current_addr, val)
+
+        # 直接测试
+        # self.handle_process_0x4008C(0x4008C, 10)
 
     def get_realtime_point(self):
         """
@@ -565,10 +569,12 @@ class Controller(QThread):
     def take_photo_check(self):
         return "OK"
 
-    def take_photo_position(self, camera_coords, config, loading=None, ptype=1):
+    def take_photo_position(self, camera_coords, config, loading=None, ptype=const.photo_type_normal):
         """
         :param camera_coords:传给相机的拍照位置坐标
+        :param config, 肘关节的状态，elbow_up/elbow_down
         :param loading, 上下料参数，1/上料，2/下料
+        :param ptype, 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
         :return:
         {
             "res": "ok/ng"
@@ -581,19 +587,22 @@ class Controller(QThread):
 
         photo，表示coords中返回一个坐标p_r0，直接移动到p_r0处进行拍照
         retrive，表示coords中返回两个坐标p_r0，p_r1，移动到p_r1处进行抓取
+
         """
         try:
             if not self.vision_service:
                 logger.error("视觉服务未就绪")
                 return {"res": "ng", "coords": [], "trigger": ""}
 
-            logger.info(f"camera_coords >>>>>>>> : {camera_coords}, loading : {loading}")
-            camera_prepare_coords = self.prepare_params_for_camera({"coords": camera_coords, "config": config})
-            logger.info(f"camera_prepare_coords >>>>>> : {camera_prepare_coords}")
+            logger.info(f"camera_coords >>>>>>>> : {camera_coords}, loading : {loading}, ptype : {ptype}")
 
+            # camera_prepare_coords = self.prepare_params_for_camera({"coords": camera_coords, "config": config})
+            # logger.info(f"camera_prepare_coords >>>>>> : {camera_prepare_coords}")
             # pos = VisionSystem().run(camera_prepare_coords, loading=loading) # 相机只要x,y,z，不要r参数
 
             algo_response = self.vision_service.execute_detection(ptype)
+            logger.info(f"algo_response >>>>>>>> : {algo_response}")
+
 
             if algo_response["code"] == 0:
                 result = algo_response["result"]
@@ -602,8 +611,6 @@ class Controller(QThread):
                 # 或者如果是多目标: "coords": [[x,y,z,r], [x,y,z,r]]
 
                 # 兼容之前的 handle_vision_recursive 逻辑，我们需要适配格式
-
-                # 模拟适配逻辑 (根据实际 C++ 返回修改)：
                 detected_coords = result.get("coords", [])
                 # 如果返回的是单层列表 [x,y,z,r]，转为嵌套 [[x,y,z,r]]
                 if detected_coords and isinstance(detected_coords[0], (int, float)):
@@ -620,7 +627,6 @@ class Controller(QThread):
 
                 return {
                     "res": res,
-                    "ptype": ptype,
                     "coords": detected_coords,
                     "trigger": trigger_type
                 }
@@ -779,11 +785,12 @@ class Controller(QThread):
         self.last_motion_end_point = target_point
         return True
 
-    def handle_vision_recursive(self, process_addr, point, loading=None):
+    def handle_vision_recursive(self, process_addr, point, loading=None, photo_type=const.photo_type_normal):
         """
         :param process_addr: 动作地址位
         :param point: 拍照坐标
         :param loading, 上下料参数，1/上料，2/下料
+        :param photo_type, 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4, 默认1
 
         处理迭代式视觉逻辑
         功能：
@@ -803,7 +810,7 @@ class Controller(QThread):
             logger.info(f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {camera_coords}, 当前loading动作: {loading}")
 
             # 1. 调用相机接口
-            result = self.take_photo_position(camera_coords, config, loading=loading)
+            result = self.take_photo_position(camera_coords, config, loading=loading, photo_type=photo_type)
             logger.info(f"photo result is >>>>>>>>: {result}")
 
             # 2. 解析结果
@@ -816,6 +823,7 @@ class Controller(QThread):
                 logger.error(f"视觉返回 NG: {res_status}")
                 return False
 
+            """逻辑变动，trigger == "photo"，需要多次移动的情况暂时注释掉"""
             # === 情况 B: 需要移动重拍 (trigger == photo) ===
             # 逻辑：移动到 p_r0，然后 continue 继续下一轮拍照
             if trigger == "photo":
@@ -870,7 +878,53 @@ class Controller(QThread):
         logger.error("视觉重拍次数过多，强制停止")
         return False
 
-    def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None):
+    def handle_vision_recursive_v1(self, process_addr, point, loading=None, photo_type=const.photo_type_normal):
+        """
+        :param process_addr: 动作地址位
+        :param point: 拍照坐标
+        :param loading, 上下料参数，1/上料，2/下料
+        :param photo_type, 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4, 默认1
+
+        """
+        loop_count = 0
+        max_loops = 5
+
+        # 初始化 camera_coords
+        camera_coords = point.get("coords", [])
+        config = point.get("config", "elbow_up")
+        loading = loading
+
+        while self.running and loop_count < max_loops:
+            loop_count += 1
+            logger.info(f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {camera_coords}, 当前loading动作: {loading}")
+
+            # 1. 调用相机接口
+            result = self.take_photo_position(camera_coords, config, loading=loading, ptype=photo_type)
+            logger.info(f"photo result is >>>>>>>>: {result}")
+
+            # 2. 解析结果
+            res_status = result.get("res", "ng")
+            coords = result.get("coords", [])
+
+            # === 情况 A: 视觉 NG ===
+            if res_status != "ok":
+                logger.error(f"视觉返回 NG: {res_status}")
+                return False
+
+            logger.info(f"视觉执行成功")
+
+            # 只保存，不移动
+            # eg：保存到 0x4008C (动作76) 的名下，供 77 读取
+            if photo_type in (const.photo_type_loading, const.photo_type_unloading):
+                self.save_vision_data(process_addr, coords)
+
+            return True  # eg: 动作 76 任务完成
+
+
+        logger.error("视觉重拍次数过多，强制停止")
+        return False
+
+    def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None):
         """
         标准运动序列执行函数 (修改版)
         :param process_addr:动作地址位
@@ -911,7 +965,7 @@ class Controller(QThread):
                 if photo_trigger == 1:
                     # 调用刚才写的递归视觉逻辑
                     # 它内部会处理：拍照 -> (可能移动 -> 重拍) -> 移动到抓取点
-                    if self.handle_vision_recursive(process_addr, end_point, loading):
+                    if self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type):
                         vision_ok = True
                         # 注意：如果 handle_vision_recursive 成功，机械臂已经移动到了 p_r1
                         # 此时 self.last_motion_end_point 已经是 p_r1 了
@@ -1146,7 +1200,7 @@ class Controller(QThread):
         points.extend(process_points)
         logger.info(f"point list: {points}")
 
-        self.execute_standard_motion_sequence(process_addr, points)
+        self.execute_standard_motion_sequence(process_addr, points, photo_type=const.photo_type_normal)
 
         """
         points_count = len(points)
@@ -1577,7 +1631,7 @@ class Controller(QThread):
         logger.info(f"point list: {points}")
 
         # 执行运动控制
-        self.execute_standard_motion_sequence(process_addr, points, loading=1)
+        self.execute_standard_motion_sequence(process_addr, points, loading=1, photo_type=const.photo_type_loading)
 
         # ============================================
         # 动作全部成功完成后，更新全局记录
@@ -1611,16 +1665,16 @@ class Controller(QThread):
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
         target_points_list = []
         for idx, coords in enumerate(vision_points_coords):
-            # pt = {
-            #     "name": f"Vision_P{idx + 1}",
-            #     "coords": coords,
-            #     "photo": 0
-            # }
-            # target_points_list.append(pt)
+            pt = {
+                "name": f"Vision_P{idx + 1}",
+                "coords": coords,
+                "photo": 0
+            }
+            target_points_list.append(pt)
 
-            relative_point = self.process_camera_result_to_plc_data(coords)
-            relative_point["name"] = f"Vision_P{idx + 1}"
-            target_points_list.append(relative_point)
+            # relative_point = self.process_camera_result_to_plc_data(coords)
+            # relative_point["name"] = f"Vision_P{idx + 1}"
+            # target_points_list.append(relative_point)
 
         points = [process_start_point] + target_points_list
         logger.info(f"point list: {points}")
@@ -1719,7 +1773,7 @@ class Controller(QThread):
         logger.info(f"point list: {points}")
 
         # 执行运动控制
-        self.execute_standard_motion_sequence(process_addr, points)
+        self.execute_standard_motion_sequence(process_addr, points, photo_type=const.photo_type_normal)
 
         # ============================================
         # 动作全部成功完成后，更新全局记录
@@ -1789,7 +1843,7 @@ class Controller(QThread):
         logger.info(f"point list: {points}")
 
         # 执行运动控制
-        self.execute_standard_motion_sequence(process_addr, points)
+        self.execute_standard_motion_sequence(process_addr, points, photo_type=const.photo_type_unloading)
 
         # ============================================
         # 动作全部成功完成后，更新全局记录
@@ -1823,16 +1877,16 @@ class Controller(QThread):
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
         target_points_list = []
         for idx, coords in enumerate(vision_points_coords):
-            # pt = {
-            #     "name": f"Vision_P{idx + 1}",
-            #     "coords": coords,
-            #     "photo": 0
-            # }
-            # target_points_list.append(pt)
+            pt = {
+                "name": f"Vision_P{idx + 1}",
+                "coords": coords,
+                "photo": 0
+            }
+            target_points_list.append(pt)
 
-            relative_point = self.process_camera_result_to_plc_data(coords)
-            relative_point["name"] = f"Vision_P{idx + 1}"
-            target_points_list.append(relative_point)
+            # relative_point = self.process_camera_result_to_plc_data(coords)
+            # relative_point["name"] = f"Vision_P{idx + 1}"
+            # target_points_list.append(relative_point)
 
         points = [process_start_point] + target_points_list
 
@@ -1981,15 +2035,16 @@ class Controller(QThread):
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
         target_points_list = []
         for idx, coords in enumerate(vision_points_coords):
-            # pt = {
-            #     "name": f"Vision_P{idx + 1}",
-            #     "coords": coords,
-            #     "photo": 0
-            # }
-            # target_points_list.append(pt)
-            relative_point = self.process_camera_result_to_plc_data(coords)
-            relative_point["name"] = f"Vision_P{idx + 1}"
-            target_points_list.append(relative_point)
+            pt = {
+                "name": f"Vision_P{idx + 1}",
+                "coords": coords,
+                "photo": 0
+            }
+            target_points_list.append(pt)
+
+            # relative_point = self.process_camera_result_to_plc_data(coords)
+            # relative_point["name"] = f"Vision_P{idx + 1}"
+            # target_points_list.append(relative_point)
 
         points = [process_start_point] + target_points_list
 
@@ -2091,15 +2146,16 @@ class Controller(QThread):
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
         target_points_list = []
         for idx, coords in enumerate(vision_points_coords):
-            # pt = {
-            #     "name": f"Vision_P{idx + 1}",
-            #     "coords": coords,
-            #     "photo": 0
-            # }
-            # target_points_list.append(pt)
-            relative_point = self.process_camera_result_to_plc_data(coords)
-            relative_point["name"] = f"Vision_P{idx + 1}"
-            target_points_list.append(relative_point)
+            pt = {
+                "name": f"Vision_P{idx + 1}",
+                "coords": coords,
+                "photo": 0
+            }
+            target_points_list.append(pt)
+
+            # relative_point = self.process_camera_result_to_plc_data(coords)
+            # relative_point["name"] = f"Vision_P{idx + 1}"
+            # target_points_list.append(relative_point)
 
         points = [process_start_point] + target_points_list
 
