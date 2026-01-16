@@ -8,7 +8,8 @@ import threading
 import traceback
 from pyorbbecsdk import (OBFormat)
 from src.vision.orbbec_camera import OrbbecCameraDevice
-from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
+# from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
+from src.depthSegmentPythonV3.RGBDDepthSegmenterWrap_yolo import RGBDDetector
 from src.utils.path_helper import get_camera_img_dir
 from src.utils import logger
 
@@ -247,7 +248,7 @@ def main():
         for i in range(2):
             start_time = time.time()
             print(f"{i} time Starting detection...")
-            response = service.execute_detection(ptype=1)
+            response = service.execute_detection(ptype=4)
             print(response)
             # 处理结果
             if response["code"] == 0:

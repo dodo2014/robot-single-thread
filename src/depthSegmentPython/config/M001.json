@@ -1,0 +1,14 @@
+{
+    "camera_fx": 735.0,
+    "camera_fy": 735.0,
+    "camera_cx": 640.0,
+    "camera_cy": 400.0,
+    "depth_invalid": 0,
+    "depth_diff_thresh": 35,
+    "min_region_area": 15000,
+    "median_blur_kernel": 3,
+    "gaussian_sigma": 1.2,
+    "sort_rule": 0,
+    "detect_ok_area_min": 15000,
+    "detect_ok_area_max": 512000
+}

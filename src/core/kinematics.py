@@ -9,7 +9,10 @@ from src.utils.logger import logger
 
 
 class ScaraKinematics:
-    """SCARA机械臂运动学计算类"""
+    """
+    SCARA机械臂运动学计算类
+
+    """
 
     @staticmethod
     def inverse_kinematics(xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up'):
@@ -307,6 +310,94 @@ class ScaraKinematics:
             logger.info(f"自动选择姿态: Elbow Down (变动 {diff_down:.2f}°)")
             return res_down
 
+    def calculate_j4_from_world_angle(self, j1, j2, target_world_r):
+        """
+        根据给定的 J1, J2 和目标世界角度，反算 J4 电机角度
+        公式: J4 = World_R - (J1 + J2)
+        """
+        # 1. 基础反算
+        j4 = target_world_r - (j1 + j2)
+
+        # 2. 归一化处理 (限制在 -180 到 180 之间)
+        # 这一步非常重要，确保电机走最短路径，且数值符合常规逻辑
+        while j4 > 180:
+            j4 -= 360
+        while j4 <= -180:
+            j4 += 360
+
+        return j4
+
+    def calculate_world_angle_from_j4(self, xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up'):
+        ik_res = ScaraKinematics.inverse_kinematics_v2(
+            xe, ye, ze, te,
+            l1, l2, z0, nn3,
+            config_type=config_type
+        )
+
+        if not ik_res:
+            logger.error("相机参数准备失败：逆解无解")
+            return None
+
+        j1 = ik_res['the1']
+        j2 = ik_res['the2']
+        j4_relative = ik_res['th4']  # 即传入的 te
+
+        # 2. 计算世界绝对角度
+        # World_R = J1 + J2 + J4_relative
+        world_r = j1 + j2 + j4_relative
+
+        # 归一化 (可选)
+        while world_r > 180: world_r -= 360
+        while world_r <= -180: world_r += 360
+
+        return [xe, ye, ze, world_r]
+
+    def calculate_forward_move(self, l1, l2, z0, nn3, xe, ye, ze, te, j1_curr, j2_curr, distance, config_curr='elbow_up'):
+        """
+        计算沿当前末端方向平移后的目标坐标
+        :param j1_curr: j1当前的角度
+        :param j2_curr: j2当前的角度
+        :param distance: 平移距离 (mm)，正数向前，负数向后
+        :param config_curr: 当前位姿，elbow_up/elbow_down，传入的参数必须准确，否则会出现机械臂异常翻转
+        :return: 新的目标坐标 [x', y', z', r'] 或 None
+        """
+        # 2. 计算当前的世界绝对角度 (方向)
+        world_r = j1_curr + j2_curr + te
+        world_r_rad = math.radians(world_r)
+
+        # 3. 计算目标 Cartesian 坐标 (X', Y')
+        target_x = xe + distance * math.cos(world_r_rad)
+        target_y = ye + distance * math.sin(world_r_rad)
+        target_z = ze  # Z轴高度不变
+
+        # 4. 逆解计算新的关节角 J1', J2'
+        # 传入 te=0 即可，因为我们只关心 J1, J2
+        ik_res = ScaraKinematics.inverse_kinematics_v2(
+            target_x, target_y, target_z, 0,
+            l1, l2, z0, nn3,
+            config_type=config_curr  # 【关键】强制保持当前姿态
+        )
+
+        if not ik_res:
+            logger.error(f"平移目标点不可达: ({target_x:.2f}, {target_y:.2f})")
+            return None
+
+        j1_new = ik_res['the1']
+        j2_new = ik_res['the2']
+
+        # 5. 反算新的相对角度 r' (电机角度)
+        # 目标: J1' + J2' + r' = World_R (保持不变)
+        target_r = world_r - (j1_new + j2_new)
+
+        # 归一化 (-180, 180]
+        while target_r > 180: target_r -= 360
+        while target_r <= -180: target_r += 360
+
+        logger.info(f"平移计算: dist={distance}, World_R={world_r:.2f}°")
+        logger.info(f"  Pos: ({xe:.2f}, {ye:.2f}) -> ({target_x:.2f}, {target_y:.2f})")
+        logger.info(f"  J4:  {te:.2f} -> {target_r:.2f} (补偿手臂旋转)")
+
+        return [target_x, target_y, target_z, target_r]
 
 # ================= 验证代码 =================
 if __name__ == "__main__":
@@ -412,7 +503,7 @@ if __name__ == "__main__":
 
         # 4. 反算 J4 相对角度 (电机角度)
         # 调用之前写的辅助函数: J4 = World_R - (J1 + J2)
-        j4_relative_new = calculate_j4_from_world_angle(
+        j4_relative_new = ScaraKinematics.calculate_j4_from_world_angle(
             j1_new, j2_new, target_world_r
         )
 
@@ -430,34 +521,27 @@ if __name__ == "__main__":
         return final_point
 
 
-    def calculate_j4_from_world_angle(j1, j2, target_world_r):
-        """
-        根据给定的 J1, J2 和目标世界角度，反算 J4 电机角度
-        公式: J4 = World_R - (J1 + J2)
-        """
-        # 1. 基础反算
-        j4 = target_world_r - (j1 + j2)
-
-        # 2. 归一化处理 (限制在 -180 到 180 之间)
-        # 这一步非常重要，确保电机走最短路径，且数值符合常规逻辑
-        while j4 > 180:
-            j4 -= 360
-        while j4 <= -180:
-            j4 += 360
-
-        return j4
 
     print("坐标(146.21,879.29,20.0, -55.24) -> 关节(36.80, 108.49, 20.00, -55.24)")
     point = {'name': 'Teach_P1', 'coords': [146.21, 879.29, 20.0, -55.24], 'photo': 1, 'config': 'elbow_up'}
-    camera_coords = point.get('coords')
-    config = point.get('config')
-    camera_prepare_coords = prepare_params_for_camera({"coords": camera_coords, "config": config})
-    print(camera_prepare_coords)
+    # camera_coords = point.get('coords')
+    # config = point.get('config')
+    # camera_prepare_coords = prepare_params_for_camera({"coords": camera_coords, "config": config})
+    # print(camera_prepare_coords)
+    #
+    # coords = [146.21, 879.29, 20.0, 90.05642858130287]
+    # relative_point = process_camera_result_to_plc_data(coords, 879.29)
+    # relative_point["name"] = f"Vision_P{0 + 1}"
+    #
+    # print(relative_point)
+    xe, ye, ze, te = point.get('coords')
+    j1_curr = 36.80
+    j2_curr = 108.49
+    distance = -20.0
+    config_curr = point.get('config')
 
-    coords = [146.21, 879.29, 20.0, 90.05642858130287]
-    relative_point = process_camera_result_to_plc_data(coords, 879.29)
-    relative_point["name"] = f"Vision_P{0 + 1}"
-
-    print(relative_point)
+    # calculate_forward_move(self, l1, l2, z0, nn3, xe, ye, ze, te, j1_curr, j2_curr, distance, config_curr='elbow_up'):
+    forward_point = ScaraKinematics().calculate_forward_move(l1, l2, z0, nn3, xe, ye, ze, te, j1_curr, j2_curr, distance, config_curr=config_curr)
+    print(forward_point)
 
     sys.exit(1)
