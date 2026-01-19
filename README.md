@@ -1,3 +1,9 @@
+### 奥比中光orbbec gemini 336l文档
+    
+文档首页：https://www.orbbec.com.cn/index/Gemini330/info.html?cate=119&id=74
+
+坐标系参数：https://www.orbbec.com.cn/index/Gemini330/info.html?cate=119&id=90
+
 ### config配置说明
 
 ```

@@ -49,6 +49,10 @@ ADDR_ESTOP_MONITOR = 0x400A8
 # 急停触发值
 ESTOP_TRIGGER_VAL = 10
 
+# 机械臂 J2 活动范围是 -145 到 +145 度
+J2_LIMIT_MAX = 113
+J2_LIMIT_MIN = -113
+
 # 上一个步骤的地址位映射
 last_process_addr_map = {
     0x40082: 0x400A7,

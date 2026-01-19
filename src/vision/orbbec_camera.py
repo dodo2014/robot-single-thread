@@ -90,8 +90,8 @@ class OrbbecCameraDevice:
                 self.config.enable_stream(OBStreamType.DEPTH_STREAM)
 
             # 3. 设置软件对齐
-            # gemini 336l 不支持720p下的硬件对齐(OBAlignMode.HW_MODE)
-            logger.info("Setting alignment mode to SW_MODE...")
+            # gemini 336l 不支持720p下的硬件对齐(OBAlignMode.HW_MODE), 如果运行报错，可以注释掉软件对齐
+            # logger.info("Setting alignment mode to SW_MODE...")
             self.config.set_align_mode(OBAlignMode.SW_MODE)
 
             # 标记配置成功

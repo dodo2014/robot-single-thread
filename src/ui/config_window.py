@@ -543,8 +543,8 @@ class ConfigEditorUI(QMainWindow):
         self.table_points.setSortingEnabled(False)
 
         for i, pt in enumerate(points):
-            print("#######################")
-            print(pt)
+            # print("#######################")
+            # print(pt)
             self.table_points.setItem(i, 0, QTableWidgetItem(str(pt.get('name', ''))))
             coords = pt.get('coords', [0, 0, 0, 0])
             for j in range(4):

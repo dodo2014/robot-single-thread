@@ -6,6 +6,7 @@ import numpy as np
 # import sympy as sp
 from sympy import solve, sin, cos, symbols, Eq
 from src.utils.logger import logger
+from src.consts import const
 
 
 class ScaraKinematics:
@@ -266,8 +267,8 @@ class ScaraKinematics:
         """
         # 定义 J2 轴的物理软限位 (非常重要！根据你的机械实际情况修改)
         # 假设你的机械臂 J2 活动范围是 -145 到 +145 度
-        J2_LIMIT_MAX = 113
-        J2_LIMIT_MIN = -113
+        j2_limit_max = const.J2_LIMIT_MAX
+        j2_limit_min = const.J2_LIMIT_MIN
 
         # 1. 尝试计算 Elbow Up
         res_up = ScaraKinematics.inverse_kinematics_v2(
@@ -281,11 +282,11 @@ class ScaraKinematics:
 
         # 3. 校验合法性 (是否在限位范围内)
         valid_up = False
-        if res_up and (J2_LIMIT_MIN <= res_up['the2'] <= J2_LIMIT_MAX):
+        if res_up and (j2_limit_min <= res_up['the2'] <= j2_limit_max):
             valid_up = True
 
         valid_down = False
-        if res_down and (J2_LIMIT_MIN <= res_down['the2'] <= J2_LIMIT_MAX):
+        if res_down and (j2_limit_min <= res_down['the2'] <= j2_limit_max):
             valid_down = True
 
         # 4. 决策逻辑

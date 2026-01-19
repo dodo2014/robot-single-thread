@@ -8,8 +8,7 @@ import threading
 import traceback
 from pyorbbecsdk import (OBFormat)
 from src.vision.orbbec_camera import OrbbecCameraDevice
-# from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
-from src.depthSegmentPythonV3.RGBDDepthSegmenterWrap_yolo import RGBDDetector
+from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
 from src.utils.path_helper import get_camera_img_dir
 from src.utils import logger
 
@@ -179,10 +178,10 @@ class DetectAlgoService:
 
                 # 深度图转换: Y16 每个像素 2 字节 (uint16)
                 # 使用 np.frombuffer 并指定 dtype=np.uint16
-                depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16)
-                depth_img = depth_data.reshape((f_height, f_width)).copy()
-                # depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
-                #     (self.height, self.width)).copy()
+                # depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16)
+                # depth_img = depth_data.reshape((f_height, f_width)).copy()
+                depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
+                    (f_height, f_width)).copy()
 
                 # 本地持久化
                 # self._save_to_local(color_img, depth_img)
@@ -242,10 +241,14 @@ def main():
     # 初始化业务类
     service = DetectAlgoService(product_no="M001")
 
+    # time.sleep(3)
+
     try:
         # 上位机发起一次同步调用
         # ptype: 1 (物料识别)
-        for i in range(2):
+        for i in range(8):
+            # time.sleep(1)
+
             start_time = time.time()
             print(f"{i} time Starting detection...")
             response = service.execute_detection(ptype=4)
@@ -253,7 +256,7 @@ def main():
             # 处理结果
             if response["code"] == 0:
                 res = response["result"]
-                print(f"Detection OK: {res['ok']}, Coords: {res['coords']}")
+                print(f"Detection OK: {response}")
             else:
                 print(f"Detection Failed: {response['err_msg']}")
             end_time = time.time()

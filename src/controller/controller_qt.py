@@ -38,7 +38,6 @@ class Controller(QThread):
         self.last_axis_status = [0.0, 0.0, 0.0, 0.0]
         self.last_joint_status = [0.0, 0.0, 0.0, 0.0]
 
-
     def load_config(self):
         try:
             with open(CONFIG_FILE, "r", encoding='utf-8') as f:
@@ -78,6 +77,7 @@ class Controller(QThread):
         try:
             # 获取当前产品型号
             current_product = self.cfg_manager.get_current_product_model()
+            logger.info(f"current product: {current_product}")
             self.vision_service = DetectAlgoService(product_no=current_product)
             logger.info("视觉服务启动成功")
         except Exception as e:
@@ -157,8 +157,19 @@ class Controller(QThread):
         realtime_point = self.get_realtime_point()
         logger.info(f"current point: {realtime_point}")
 
-        # vision_result = self.vision_service.execute_detection(ptype=1)
+        #=======================================
+        # 视觉测试
+        #=======================================
+        # vision_result = self.vision_service.execute_detection(ptype=4)
         # logger.info(f"vision result: {vision_result}")
+
+        # process_addr = 0x4008C
+        # end_point = self.get_realtime_point()
+        # loading = 1
+        # photo_type = 4
+        # handle_vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
+        # logger.info(f"handle_vision_res: {handle_vision_res}")
+        #=======================================
 
         """执行一次完整的轮询和处理"""
         # 获取急停地址位的数据
@@ -562,6 +573,42 @@ class Controller(QThread):
 
         return j4
 
+    def move_forward(self, point, distance=0):
+        """
+        末端坐标前移，包括前进，后退
+        :param point: 坐标点
+        :param distance: 移动距离，>0表示前进，<0表示后退
+        :return: 移动后的点坐标
+        """
+        try:
+            xe, ye, ze, te = point.get("coords")
+            config_curr = point.get("config")
+            ik_res = ScaraKinematics().inverse_kinematics_v2(xe, ye, ze, te, self.l1, self.l2, self.z0, self.nn3,
+                                                             config_type=config_curr)
+            j1_curr = ik_res["the1"]
+            j2_curr = ik_res["the2"]
+
+            target_x, target_y, target_z, target_r = ScaraKinematics().calculate_forward_move(self.l1, self.l2, self.z0,
+                                                                                              self.nn3, xe, ye, ze, te,
+                                                                                              j1_curr, j2_curr,
+                                                                                              distance,
+                                                                                              config_curr=config_curr)
+            foward_point = {
+                "name": "FP_P0",
+                "coords": [
+                    target_x,
+                    target_y,
+                    target_z,
+                    target_r
+                ],
+                "photo": 0,
+                "config": config_curr
+            }
+            logger.info(f"foward point: {foward_point}")
+            return foward_point
+        except Exception as e:
+            logger.error(f"move forward error: {e}")
+
     def take_photo(self):
         # 执行拍照动作，拍照结果成功返回OK，异常返回NG, 返回字符串
         return "OK"
@@ -603,13 +650,10 @@ class Controller(QThread):
             algo_response = self.vision_service.execute_detection(ptype)
             logger.info(f"algo_response >>>>>>>> : {algo_response}")
 
-
             if algo_response["code"] == 0:
                 result = algo_response["result"]
-                # 假设 C++ 返回的 result 结构是:
                 # { "ok": 1, "coords": [x, y, z, r], "type": "retrieve" }
                 # 或者如果是多目标: "coords": [[x,y,z,r], [x,y,z,r]]
-
                 # 兼容之前的 handle_vision_recursive 逻辑，我们需要适配格式
                 detected_coords = result.get("coords", [])
                 # 如果返回的是单层列表 [x,y,z,r]，转为嵌套 [[x,y,z,r]]
@@ -617,13 +661,23 @@ class Controller(QThread):
                     detected_coords = [detected_coords]
 
                 trigger_type = "retrieve"  # 默认抓取
+                res = "ng"
 
-                res = "ok" if 1 == result.get("ok") else "ng"
-
-                if 1 == result.get("ok"):
-                    logger.info(f"视觉识别成功: {detected_coords}")
-                elif 2 == result.get("ok"):
-                    logger.error(f"视觉识别失败: {detected_coords}")
+                # res = "ok" if 1 == result.get("ok") else "ng"
+                # ok_res = result.get("ok")
+                exists = result.get("exists")
+                if ptype == const.photo_type_normal: # 1/有料，报ok
+                    if exists == 1:
+                        res = "ok"
+                elif ptype == const.photo_type_loading: # 1/有料，报ok; 2/无料, 报ng
+                    if exists == 1:
+                        res = "ok"
+                elif ptype == const.photo_type_unloading: # 1
+                    if result.get("coords", []):
+                        res = "ok"
+                elif ptype == const.photo_type_aluminum:  # 1/有铝屑，报ng; 2/没铝屑，正常，报ok
+                    if exists == 2:
+                        res = "ok"
 
                 return {
                     "res": res,
@@ -785,15 +839,16 @@ class Controller(QThread):
         self.last_motion_end_point = target_point
         return True
 
-    def handle_vision_recursive(self, process_addr, point, loading=None, photo_type=const.photo_type_normal):
+    def handle_vision_recursive_v0(self, process_addr, point, loading=None, photo_type=const.photo_type_normal):
         """
         :param process_addr: 动作地址位
         :param point: 拍照坐标
         :param loading, 上下料参数，1/上料，2/下料
         :param photo_type, 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4, 默认1
 
-        处理迭代式视觉逻辑
-        功能：
+        功能:
+            递归视觉逻辑
+            内部会处理：拍照 -> (可能移动 -> 重拍) -> 移动到抓取点
         1. Photo 模式：移动到新拍照点，继续循环。
         2. Retrieve 模式：保存坐标数据，返回 True，不执行抓取移动。
         """
@@ -807,7 +862,8 @@ class Controller(QThread):
 
         while self.running and loop_count < max_loops:
             loop_count += 1
-            logger.info(f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {camera_coords}, 当前loading动作: {loading}")
+            logger.info(
+                f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {camera_coords}, 当前loading动作: {loading}, 当前拍照触发类型: {photo_type}")
 
             # 1. 调用相机接口
             result = self.take_photo_position(camera_coords, config, loading=loading, photo_type=photo_type)
@@ -920,7 +976,6 @@ class Controller(QThread):
 
             return True  # eg: 动作 76 任务完成
 
-
         logger.error("视觉重拍次数过多，强制停止")
         return False
 
@@ -930,6 +985,7 @@ class Controller(QThread):
         :param process_addr:动作地址位
         :param points_sequence: 坐标点位
         :param loading: 上下料标记，1/上料，2/下料
+        :param photo_type, 普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
         """
         # 1. 检查急停
         if self.check_estop():
@@ -963,8 +1019,7 @@ class Controller(QThread):
                 vision_ok = True
 
                 if photo_trigger == 1:
-                    # 调用刚才写的递归视觉逻辑
-                    # 它内部会处理：拍照 -> (可能移动 -> 重拍) -> 移动到抓取点
+                    # 调用视觉逻辑
                     if self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type):
                         vision_ok = True
                         # 注意：如果 handle_vision_recursive 成功，机械臂已经移动到了 p_r1
@@ -993,7 +1048,7 @@ class Controller(QThread):
         self.plc.write_register(process_addr, 13)
         return True
 
-    def execute_standard_motion_sequence_v0(self, process_addr, points_sequence):
+    def execute_standard_motion_sequence_history_1(self, process_addr, points_sequence):
         """
         通用的运动控制序列执行函数
         :param points_sequence: 包含起点的完整点位列表 [Start, P1, P2...]
@@ -1487,6 +1542,12 @@ class Controller(QThread):
 
         logger.info(f"point list: {points}")
 
+        last_point = points[-1]
+        distance = 50
+        forward_point = self.move_forward(last_point, distance)
+        logger.info(f"foward point: {forward_point}")
+        points.append(forward_point)
+
         # 执行运动控制
         self.execute_standard_motion_sequence(process_addr, points)
 
@@ -1521,6 +1582,14 @@ class Controller(QThread):
         points_count = len(points)
 
         logger.info(f"point list: {points}")
+
+        # l1, l2, z0, nn3, xe, ye, ze, te, j1_curr, j2_curr, distance, config_curr
+        last_point = points[-1]
+        distance = -50
+
+        forward_point = self.move_forward(last_point, distance)
+        logger.info(f"foward point: {forward_point}")
+        points.append(forward_point)
 
         # 执行运动控制
         self.execute_standard_motion_sequence(process_addr, points)

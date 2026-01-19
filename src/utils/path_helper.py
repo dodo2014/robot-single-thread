@@ -75,5 +75,5 @@ def get_camera_img_dir() -> Path:
     return img_dir
 
 def get_vision_detector_dir() -> Path:
-    vision_detector_dir = get_base_path() / "src/depthSegmentPythonV3"
+    vision_detector_dir = get_base_path() / "src/depthSegmentPython"
     return vision_detector_dir
