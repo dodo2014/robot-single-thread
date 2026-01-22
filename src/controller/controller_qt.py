@@ -34,8 +34,9 @@ class Controller(QThread):
 
         self.origin_point = self.cfg_manager.get_origin_params()  # 获取原点配置
         self.last_motion_end_point = self.origin_point  # 定义【全局当前坐标记录】，初始化为原点
-        # 用于存储实时电机状态 [J1, J2, J3, J4], 初始化为 0.0，供 UI 读取
+        # 存储实时坐标[x,y,z,r]
         self.last_axis_status = [0.0, 0.0, 0.0, 0.0]
+        # 存储实时电机状态 [J1, J2, J3, J4], 初始化为 0.0，供 UI 读取
         self.last_joint_status = [0.0, 0.0, 0.0, 0.0]
 
     def load_config(self):
@@ -153,13 +154,56 @@ class Controller(QThread):
             logger.error(f"急停检查异常: {e}")
             return False
 
+    def check_and_handle_pause(self):
+        """
+        检查暂停状态。
+        如果收到 10，则进入死循环阻塞，直到收到 11 或 触发急停。
+        :return: True if paused and resumed, False if no pause happened
+        """
+        is_paused_once = False
+        try:
+            # 读取状态
+            addr = self.plc.map_modbus_address(const.ADDR_PAUSE_CONTROL)
+            regs = self.plc.read_holding_registers(addr, 1)
+
+            if regs and regs[0] == const.VAL_PAUSE_REQ:  # 10
+                logger.warning(">>> 监测到暂停信号(10)，系统挂起 <<<")
+
+                while self.running:
+                    # 优先检查急停 (急停权限高于暂停，必须能打断暂停)
+                    if self.check_estop():
+                        logger.critical("暂停期间触发急停，退出暂停等待")
+                        return False  # 退出暂停函数，外层逻辑会捕获急停并 return
+
+                    regs_wait = self.plc.read_holding_registers(addr, 1)
+                    if regs_wait:
+                        val = regs_wait[0]
+                        # 判断恢复信号
+                        if val == const.VAL_RESUME_REQ:  # 11
+                            logger.info(">>> 监测到恢复信号(11)，复位信号并继续 <<<")
+                            # 握手复位：写入 0
+                            # self.plc.write_register(const.ADDR_PAUSE_CONTROL, const.VAL_RESET)
+                            logger.info(
+                                f"复位暂停信号 {hex(const.ADDR_PAUSE_CONTROL)} - {addr} -> 0")
+
+                            is_paused_once = True
+                            break  # 退出死循环
+
+                    # 降低轮询频率
+                    time.sleep(0.5)
+
+        except Exception as e:
+            logger.error(f"暂停检查出错: {e}")
+
+        return is_paused_once
+
     def loop_once(self):
         realtime_point = self.get_realtime_point()
         logger.info(f"current point: {realtime_point}")
 
-        #=======================================
+        # =======================================
         # 视觉测试
-        #=======================================
+        # =======================================
         # vision_result = self.vision_service.execute_detection(ptype=4)
         # logger.info(f"vision result: {vision_result}")
 
@@ -169,7 +213,7 @@ class Controller(QThread):
         # photo_type = 4
         # handle_vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
         # logger.info(f"handle_vision_res: {handle_vision_res}")
-        #=======================================
+        # =======================================
 
         """执行一次完整的轮询和处理"""
         # 获取急停地址位的数据
@@ -177,7 +221,7 @@ class Controller(QThread):
         logger.info(
             f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
 
-        # === 1. 全局急停拦截 ===
+        # === 全局急停拦截 ===
         if self.check_estop():
             # 如果检测到急停：
             # 1. 清除可能存在的缓存状态
@@ -188,13 +232,23 @@ class Controller(QThread):
             time.sleep(0.5)  # 降低轮询频率
             return
 
-        # === 2. 正常业务流程 ===
+        # 暂停检查
+        self.check_and_handle_pause()
+
+        # === 正常业务流程 ===
         # 1. 批量读取状态寄存器
+        start_addr = self.plc.map_modbus_address(const.process_start_addr)
         states = self.plc.read_holding_registers(
-            self.plc.map_modbus_address(const.process_start_addr),
+            start_addr,
             const.process_num
         )
         logger.info(f"loop states: {states}")
+        addr_value_map = {
+            start_addr + idx: val
+            for idx, val in enumerate(states)
+        }
+        logger.info(f"loop states (地址:值): {addr_value_map}")
+
         if not states:
             return
 
@@ -249,7 +303,7 @@ class Controller(QThread):
                 # 调用对应的处理方法
                 handler_map[current_addr](current_addr, val)
 
-        # 直接测试
+        # 直接测试动作
         # self.handle_process_0x4008C(0x4008C, 10)
 
     def get_realtime_point(self):
@@ -357,6 +411,9 @@ class Controller(QThread):
             if self.check_estop():
                 logger.warning("发送过程中急停，终止发送")
                 return False
+
+            # 暂停检查
+            self.check_and_handle_pause()
 
             if i < len(points):
                 # === 有配置数据，进行计算 ===
@@ -666,13 +723,13 @@ class Controller(QThread):
                 # res = "ok" if 1 == result.get("ok") else "ng"
                 # ok_res = result.get("ok")
                 exists = result.get("exists")
-                if ptype == const.photo_type_normal: # 1/有料，报ok
+                if ptype == const.photo_type_normal:  # 1/有料，报ok
                     if exists == 1:
                         res = "ok"
-                elif ptype == const.photo_type_loading: # 1/有料，报ok; 2/无料, 报ng
+                elif ptype == const.photo_type_loading:  # 1/有料，报ok; 2/无料, 报ng
                     if exists == 1:
                         res = "ok"
-                elif ptype == const.photo_type_unloading: # 1
+                elif ptype == const.photo_type_unloading:  # 1
                     if result.get("coords", []):
                         res = "ok"
                 elif ptype == const.photo_type_aluminum:  # 1/有铝屑，报ng; 2/没铝屑，正常，报ok
@@ -783,6 +840,10 @@ class Controller(QThread):
             if self.check_estop():
                 logger.warning("任务因急停中断，停止等待")
                 return False  # 返回 False，上层逻辑会感知并退出
+
+            # 暂停检查, 直到恢复才继续运行；暂停恢复后，重置 start_time，给足时间让机械臂继续走
+            if self.check_and_handle_pause():
+                start_time = time.time()
 
             # 如果 timeout < 0，则无限等待
             if timeout > 0 and (time.time() - start_time > timeout):

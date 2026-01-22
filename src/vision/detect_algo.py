@@ -119,8 +119,10 @@ class DetectAlgoService:
                 "code": 0,    #  正常返回0，异常返回其他值
                 "result": {
                     "ptype"：1， # 类型
-                    "coords": [x,y,z,r] # 坐标参数
-                    "ok": 1 # 检测结果，ok/1，ng/2
+                    "coords": [x,y,z,r], # 坐标参数
+                    "ok": 1, # 检测结果，ok/1，ng/2
+                    "exists": 1 # 根据ptype类型判断，1：exists == 1 表示有料，ok； 2：exists == 1 表示有料OK， 2表示空料ng；
+                                3:exists == 2 表示无料；4:exists == 1 有铁屑，表示ng；
                 }
                 "err_msg": ""   # 异常日志，0返回空
             }
@@ -205,6 +207,17 @@ class DetectAlgoService:
                 # return result
 
                 result = self.detector.detect(ptype, color_img, depth_img)
+
+                # logger.info(f"detector result: {result}")
+                #
+                # depth_color = self.detector.depth_pseudo_color(depth_img)
+                #
+                # result_img = self.detector.draw_result_with_rotated_box(depth_color, result)
+                # cv2.imshow("result-line", result_img)
+                # cv2.imwrite("./detect_result_horizontal_line.jpg", result_img)
+                #
+                # cv2.waitKey(0)
+
                 return result
 
                 # return {"code": 0, "result": {"ok": 1, "coords": [0, 0, 0, 0]}, "err_msg": ""}
@@ -237,6 +250,7 @@ class DetectAlgoService:
         self.detector.init(self.product_no)
         logger.info("Algorithm updated.")
 
+
 def main():
     # 初始化业务类
     service = DetectAlgoService(product_no="M001")
@@ -246,21 +260,22 @@ def main():
     try:
         # 上位机发起一次同步调用
         # ptype: 1 (物料识别)
-        for i in range(8):
-            # time.sleep(1)
+        # for i in range(50):
+        # time.sleep(1)
 
-            start_time = time.time()
-            print(f"{i} time Starting detection...")
-            response = service.execute_detection(ptype=4)
-            print(response)
-            # 处理结果
-            if response["code"] == 0:
-                res = response["result"]
-                print(f"Detection OK: {response}")
-            else:
-                print(f"Detection Failed: {response['err_msg']}")
-            end_time = time.time()
-            print(f"Detection Time: {end_time - start_time}")
+        # start_time = time.time()
+        # print(f"{i} time Starting detection...")
+        response = service.execute_detection(ptype=2)
+        print(response)
+
+        # 处理结果
+        if response["code"] == 0:
+            res = response["result"]
+            print(f"Detection OK: {response}")
+        else:
+            print(f"Detection Failed: {response['err_msg']}")
+        end_time = time.time()
+        # print(f"Detection Time: {end_time - start_time}")
 
     finally:
         service.shutdown()

@@ -4,7 +4,7 @@ from pyorbbecsdk import (Pipeline, Config, Context, OBError,
 from src.utils import logger
 
 class OrbbecCameraDevice:
-    def __init__(self, width=1280, height=720, fps=15):
+    def __init__(self, width=1280, height=800, fps=15):
         self.ctx = Context()
         # 设置设备插拔回调 (可选，但这里我们主要用轮询方式实现)
         self.ctx.set_device_changed_callback(self._on_device_changed)

@@ -10,8 +10,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from src.utils.config_manager import CONFIG_FILE
 
-ADDR_FEEDBACK_START = 0x400BE
-FEEDBACK_LEN = 8  # 4个float = 8个寄存器
+# ADDR_FEEDBACK_START = 0x400BE
+# FEEDBACK_LEN = 8  # 4个float = 8个寄存器
 
 class ConfigEditorUI(QMainWindow):
     def __init__(self, controller_instance):

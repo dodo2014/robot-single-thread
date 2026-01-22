@@ -49,6 +49,12 @@ ADDR_ESTOP_MONITOR = 0x400A8
 # 急停触发值
 ESTOP_TRIGGER_VAL = 10
 
+# 暂停/恢复控制
+ADDR_PAUSE_CONTROL = 0x400A5
+VAL_PAUSE_REQ = 10    # 暂停请求
+VAL_RESUME_REQ = 11   # 恢复请求
+VAL_RESET = 0         # 复位/空闲
+
 # 机械臂 J2 活动范围是 -145 到 +145 度
 J2_LIMIT_MAX = 113
 J2_LIMIT_MIN = -113
