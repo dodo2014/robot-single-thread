@@ -1,5 +1,5 @@
 ### 奥比中光orbbec gemini 336l文档
-    
+
 文档首页：https://www.orbbec.com.cn/index/Gemini330/info.html?cate=119&id=74
 
 坐标系参数：https://www.orbbec.com.cn/index/Gemini330/info.html?cate=119&id=90
@@ -17,6 +17,24 @@
     "l2": 650.0,     // 小臂长度
     "z0": 0.0,       // z轴高度
     "nn3": 0.05       // z轴丝杆导程的倒数，即 rev/mm, 每毫米需要转几圈
+  },
+  "tools": {
+    "current_model": "1号夹具",
+    "models": {
+        "1号夹具": {
+            "camera": {
+                    "offset_x": 157.0,   // 假设相机在前方
+                    "offset_y": 23.75,
+                    "rotation": 0
+                },
+                "main_gripper": {
+                    "desc": "4号和5号夹爪的几何中心",
+                    "offset_x": 125.0,     // 假设夹爪组中心刚好在电机正下方
+                    "offset_y": 0.0,     // 如果有偏置，请填入实测值
+                    "z_diff": 265.3      // 夹爪底部比相机镜头低 120mm
+                }
+        }
+    }
   },
   "origin_params": {  // 原点配置
     "name": "初始位置原点",
@@ -72,6 +90,13 @@
     "num_points": 9,
     "max_velocity": null,
     "acceleration_time": 0.2
+  },
+  "product_config": {  // 产品型号
+    "model_list": [  // 型号列表
+      "M001",
+      "M002"
+    ],
+    "current_model": "M001" // 当前型号
   }
 }
 ```

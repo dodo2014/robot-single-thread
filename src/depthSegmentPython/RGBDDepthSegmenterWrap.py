@@ -8,14 +8,13 @@ from src.utils.path_helper import get_vision_detector_dir
 
 # ===================== 常量定义 =====================
 class SortRule:
-    SORT_BY_Y_DESC = 0  # 按Y降序 → 从ROI底部向上扫描，找第一个水平直线 ✅核心联动
-    SORT_BY_Y_ASC = 1  # 按Y升序 → 从ROI顶部向下扫描，找第一个水平直线 ✅核心联动
+    SORT_BY_Y_DESC = 0    # 按Y降序 → 从ROI底部向上扫描，找第一个水平直线 ✅核心联动
+    SORT_BY_Y_ASC = 1     # 按Y升序 → 从ROI顶部向下扫描，找第一个水平直线 ✅核心联动
     SORT_BY_X_DESC = 2
     SORT_BY_X_ASC = 3
     SORT_BY_AREA_DESC = 4
     SORT_BY_DEPTH_ASC = 5
     SORT_BY_ID_ASC = 6
-
 
 class PType:
     MATERIAL_CHECK = 1
@@ -23,14 +22,12 @@ class PType:
     UNLOAD_CHECK = 3
     IRON_CHIP_CHECK = 4
 
-
 class DetectStatus:
     UNKNOWN = 0
     OK = 1
     NG = 2
     EXIST = 1
     NOTHING = 2
-
 
 # ===================== 核心检测类 完整封装 =====================
 class RGBDDetector:
@@ -47,8 +44,8 @@ class RGBDDetector:
         self.gaussian_sigma = 1.2
         self.sort_rule = SortRule.SORT_BY_Y_DESC
         # 深度区间过滤参数
-        self.feed_depth_min = 50
-        self.feed_depth_max = 2000
+        self.feed_depth_min = 50    
+        self.feed_depth_max = 2000  
 
         # ===================== 多ROI配置拆分 =====================
         # 1. 上料ROI（原ROI）
@@ -56,6 +53,8 @@ class RGBDDetector:
         self.feed_roi_y = 0
         self.feed_roi_w = 640
         self.feed_roi_h = 480
+        self.feed_min_length = 300 # 产品最小宽度（像素）
+
         # 2. 物料缓存台ROI + 深度范围
         self.material_roi_x = 0
         self.material_roi_y = 0
@@ -63,6 +62,7 @@ class RGBDDetector:
         self.material_roi_h = 480
         self.material_depth_min = 100  # 物料存在的最小深度
         self.material_depth_max = 500  # 物料存在的最大深度
+
         # 3. YOLO铁屑检测ROI
         self.yolo_roi_x = 0
         self.yolo_roi_y = 0
@@ -70,44 +70,47 @@ class RGBDDetector:
         self.yolo_roi_h = 480
 
         # YOLO铁屑检测 相关配置
-        self.yolov4_cfg_path = "./yolov4/iron_chip.cfg"  # yolov4配置文件路径
-        self.yolov4_weights_path = "./yolov4/iron_chip.weights"  # yolov4权重文件路径
-        self.yolov4_names_path = "./yolov4/iron_chip.names"  # 类别名称文件路径
-        self.yolov4_conf_threshold = 0.5
-        self.yolov4_nms_threshold = 0.45
-        self.yolov4_input_w = 608  # 输入宽度
-        self.yolov4_input_h = 608  # 输入高度
+        self.yolov4_cfg_path = "./yolov4/iron_chip.cfg"    # yolov4配置文件路径
+        self.yolov4_weights_path = "./yolov4/iron_chip.weights" # yolov4权重文件路径
+        self.yolov4_names_path = "./yolov4/iron_chip.names"        # 类别名称文件路径
+        self.yolov4_conf_threshold = 0.5                           
+        self.yolov4_nms_threshold = 0.45                           
+        self.yolov4_input_w = 608                                  # 输入宽度
+        self.yolov4_input_h = 608                                  # 输入高度
         self.yolov4_net = None
         self.yolov4_classes = []
         self.detect_iron_chips = []
+                                    
         # 末端工具相对相机中心的坐标
         self.tool_coord_x = 0
         self.tool_coord_y = 0
         self.tool_coord_z = 0
         self.tool_coord_r = 0
-        # 8邻域偏移量
-        self.neighbors_8 = [(-1, -1), (0, -1), (1, -1),
-                            (-1, 0), (1, 0),
-                            (-1, 1), (0, 1), (1, 1)]
+
         random.seed(10)
         # 保存分割后的区域结果，用于绘图接口调用
         self.detected_regions = []
         # ===================== 新增：水平直线判定阈值（可按需微调） =====================
-        self.horizontal_y_var_thresh = 3  # Y坐标方差阈值 <3 → 接近水平，越小越严格
-        self.horizontal_x_span_min = 30  # X坐标最小跨度 >30 → 有效直线，过滤孤立点
-        self.horizontal_pixel_min = 20  # 最小像素数 >20 → 过滤小毛刺
+        self.horizontal_y_var_thresh = 3    # Y坐标方差阈值 <3 → 接近水平，越小越严格
+        self.horizontal_x_span_min = 30      # X坐标最小跨度 >30 → 有效直线，过滤孤立点
+        self.horizontal_pixel_min = 20       # 最小像素数 >20 → 过滤小毛刺
 
         # ===================== 下料算法配置参数 =====================
-        self.unload_roi_x = 0  # 下料区域ROI X
-        self.unload_roi_y = 0  # 下料区域ROI Y
-        self.unload_roi_w = 640  # 下料区域ROI 宽度
-        self.unload_roi_h = 480  # 下料区域ROI 高度
-        self.unload_layer_count = 3  # 下料层数
-        self.unload_layer_height = 50  # 层高（mm）
-        self.unload_item_count_per_layer = 5  # 每层放置产品数量
-        self.unload_item_interval = 80  # 产品间隔（像素/物理尺寸，根据标定转换）
-        self.unload_item_width = 60  # 产品宽度（像素）
-        self.unload_depth_threshold = 20  # 深度差阈值：判断该位置是否有物料
+        self.unload_roi_x = 0               # 下料区域ROI X
+        self.unload_roi_y = 0               # 下料区域ROI Y
+        self.unload_roi_w = 640             # 下料区域ROI 宽度
+        self.unload_roi_h = 480             # 下料区域ROI 高度
+        self.unload_layer_count = 3         # 下料层数
+        self.unload_layer_height = 50       # 层高（mm）
+        self.unload_item_count_per_layer = 5# 每层放置产品数量
+        self.unload_item_interval = 80      # 产品间隔（像素/物理尺寸，根据标定转换）
+        self.unload_item_width = 600        # 产品宽度（像素）
+        self.unload_item_height = 60        # 产品高度（像素）
+        self.unload_depth_threshold = 20    # 深度差阈值：判断该位置是否有物料
+        self.unload_depth_min = 100         # 物料存在的最小深度
+        self.unload_depth_max = 500         # 物料存在的最大深度
+        self.feed_min_length = 300          # 产品最小宽度（像素）
+
 
     # ===================== 【私有函数】初始化YOLOv4模型加载 =====================
     def _init_yolov4_model(self):
@@ -129,15 +132,14 @@ class RGBDDetector:
         self.detect_iron_chips = []
         if self.yolov4_net is None or len(self.yolov4_classes) == 0:
             return False, []
-
+        
         (H, W) = rgb_img.shape[:2]
         # 获取YOLOv4输出层
         ln = self.yolov4_net.getLayerNames()
         ln = [ln[i - 1] for i in self.yolov4_net.getUnconnectedOutLayers()]
-
+        
         # 预处理图像：转为blob格式
-        blob = cv2.dnn.blobFromImage(rgb_img, 1 / 255.0, (self.yolov4_input_w, self.yolov4_input_h), swapRB=True,
-                                     crop=False)
+        blob = cv2.dnn.blobFromImage(rgb_img, 1 / 255.0, (self.yolov4_input_w, self.yolov4_input_h), swapRB=True, crop=False)
         self.yolov4_net.setInput(blob)
         layer_outputs = self.yolov4_net.forward(ln)
 
@@ -161,10 +163,10 @@ class RGBDDetector:
                     boxes.append([x, y, int(width), int(height)])
                     confidences.append(float(confidence))
                     class_ids.append(class_id)
-
+        
         # 非极大值抑制去重
         idxs = cv2.dnn.NMSBoxes(boxes, confidences, self.yolov4_conf_threshold, self.yolov4_nms_threshold)
-
+        
         # ✅ 新增：YOLO检测结果ROI过滤（质心不在ROI内则删除）
         yolo_roi_x_end = self.yolo_roi_x + self.yolo_roi_w
         yolo_roi_y_end = self.yolo_roi_y + self.yolo_roi_h
@@ -173,7 +175,7 @@ class RGBDDetector:
         yolo_roi_y = max(self.yolo_roi_y, 0)
         yolo_roi_x_end = min(yolo_roi_x_end, W)
         yolo_roi_y_end = min(yolo_roi_y_end, H)
-
+        
         # ✅ 核心优化：保存 框坐标 + 置信度 双信息，同时过滤ROI外的结果
         if len(idxs) > 0:
             for i in idxs.flatten():
@@ -183,10 +185,10 @@ class RGBDDetector:
                 centroid_x = x1 + w // 2
                 centroid_y = y1 + h // 2
                 # 检查质心是否在YOLO ROI内
-                if (yolo_roi_x <= centroid_x < yolo_roi_x_end and
-                        yolo_roi_y <= centroid_y < yolo_roi_y_end):
-                    self.detect_iron_chips.append((x1, y1, w, h, round(conf, 2)))
-
+                if (yolo_roi_x <= centroid_x < yolo_roi_x_end and 
+                    yolo_roi_y <= centroid_y < yolo_roi_y_end):
+                    self.detect_iron_chips.append( (x1, y1, w, h, round(conf, 2)) )
+        
         # 返回：是否检测到铁屑、铁屑框列表(带置信度)
         return len(self.detect_iron_chips) > 0, self.detect_iron_chips
 
@@ -197,9 +199,9 @@ class RGBDDetector:
             config_path = get_vision_detector_dir() / f"./config/{product_no}.json"
             if not os.path.exists(config_path):
                 return {"code": -1, "err_msg": f"配置文件不存在: {config_path}"}
-
+            
             with open(config_path, 'r', encoding='utf-8') as f:
-                # cfg = json.load(f)
+                #cfg = json.load(f)
                 json_str = f.read()
                 # 正则1：删除 /* 任意多行注释 */
                 json_str = re.sub(r"/\*[\s\S]*?\*/", "", json_str)
@@ -209,7 +211,7 @@ class RGBDDetector:
                 json_str = re.sub(r"\n+", "\n", json_str).strip()
                 # 解析清理后的纯JSON内容
                 cfg = json.loads(json_str)
-
+            
             # 基础相机参数
             self.camera_fx = cfg.get("camera_fx", 615.0)
             self.camera_fy = cfg.get("camera_fy", 615.0)
@@ -228,6 +230,8 @@ class RGBDDetector:
             self.feed_roi_y = cfg.get("feed_roi_y", 0)
             self.feed_roi_w = cfg.get("feed_roi_w", 640)
             self.feed_roi_h = cfg.get("feed_roi_h", 480)
+            self.feed_min_length = cfg.get("feed_min_length", 300)
+            
             # 2. 物料缓存台ROI + 深度范围
             self.material_roi_x = cfg.get("material_roi_x", 0)
             self.material_roi_y = cfg.get("material_roi_y", 0)
@@ -235,6 +239,7 @@ class RGBDDetector:
             self.material_roi_h = cfg.get("material_roi_h", 480)
             self.material_depth_min = cfg.get("material_depth_min", 100)
             self.material_depth_max = cfg.get("material_depth_max", 500)
+
             # 3. YOLO铁屑检测ROI
             self.yolo_roi_x = cfg.get("yolo_roi_x", 0)
             self.yolo_roi_y = cfg.get("yolo_roi_y", 0)
@@ -249,7 +254,7 @@ class RGBDDetector:
             self.yolov4_nms_threshold = cfg.get("yolov4_nms_threshold", 0.45)
             self.yolov4_input_w = cfg.get("yolov4_input_w", 608)
             self.yolov4_input_h = cfg.get("yolov4_input_h", 608)
-
+            
             # 末端工具坐标
             self.tool_coord_x = cfg.get("tool_coord_x", 0)
             self.tool_coord_y = cfg.get("tool_coord_y", 0)
@@ -265,12 +270,14 @@ class RGBDDetector:
             self.unload_layer_height = cfg.get("unload_layer_height", 50)
             self.unload_item_count_per_layer = cfg.get("unload_item_count_per_layer", 5)
             self.unload_item_interval = cfg.get("unload_item_interval", 80)
-            self.unload_item_width = cfg.get("unload_item_width", 60)
+            self.unload_item_width = cfg.get("unload_item_width", 600)
+            self.unload_item_height = cfg.get("unload_item_height", 60)
             self.unload_depth_threshold = cfg.get("unload_depth_threshold", 20)
+            self.unload_min_length = cfg.get("unload_min_length", 300)
 
             self.config_loaded = True
             self._init_yolov4_model()
-
+            
             return {"code": 0}
         except Exception as e:
             return {"code": -2, "err_msg": f"初始化失败: {str(e)}"}
@@ -280,7 +287,7 @@ class RGBDDetector:
         x = (pixel[0] - self.camera_cx) * depth_mm / self.camera_fx
         y = (pixel[1] - self.camera_cy) * depth_mm / self.camera_fy
         z = depth_mm
-        return (round(x, 2), round(y, 2), round(z, 2))
+        return (round(x,2), round(y,2), round(z,2))
 
     # ✅ 【保留原函数】旋转矩形 顶边/底边 中点计算 【无修改】
     def _get_edge_center_point(self, rotated_rect):
@@ -319,7 +326,454 @@ class RGBDDetector:
         elif self.sort_rule == SortRule.SORT_BY_DEPTH_ASC:
             regions.sort(key=lambda x: x["avg_depth"])
         for i in range(len(regions)):
-            regions[i]["region_id"] = 1  # 固定ID=1，因为永远只有1个结果
+            regions[i]["region_id"] = 1 # 固定ID=1，因为永远只有1个结果
+
+    # 线段合并函数
+    def _merge_nearby_lines(self, lines, max_gap=20, angle_threshold=10):
+        """
+        合并接近水平且端点距离较近的线段
+        
+        参数:
+            lines: 线段列表，每个元素为字典，包含:
+                - 'points': [(x1,y1), (x2,y2)] 线段端点
+                - 'length': 线段长度
+                - 'angle': 线段角度(度)
+                - 'y_avg': 线段平均Y坐标
+            max_gap: 最大端点距离阈值(像素)
+            angle_threshold: 角度差异阈值(度)，小于此值认为方向相近
+            
+        返回:
+            合并后的线段列表
+        """
+        if not lines:
+            return []
+        
+        # 按Y坐标排序，便于从上到下或从下到上处理
+        lines_sorted = sorted(lines, key=lambda l: l['y_avg'])
+        
+        merged_lines = []
+        used_indices = set()
+        
+        for i in range(len(lines_sorted)):
+            if i in used_indices:
+                continue
+                
+            current_line = lines_sorted[i]
+            (x1_curr, y1_curr), (x2_curr, y2_curr) = current_line['points']
+            
+            # 确定线段的左右端点（保证x1 <= x2）
+            if x1_curr > x2_curr:
+                x1_curr, x2_curr = x2_curr, x1_curr
+                y1_curr, y2_curr = y2_curr, y1_curr
+            
+            merged_line = {
+                'points': [(x1_curr, y1_curr), (x2_curr, y2_curr)],
+                'length': current_line['length'],
+                'angle': current_line['angle'],
+                'y_avg': current_line['y_avg']
+            }
+            
+            used_indices.add(i)
+            
+            # 寻找与当前线段可以合并的线段
+            for j in range(i+1, len(lines_sorted)):
+                if j in used_indices:
+                    continue
+                    
+                other_line = lines_sorted[j]
+                (x1_other, y1_other), (x2_other, y2_other) = other_line['points']
+                
+                # 确定其他线段的左右端点
+                if x1_other > x2_other:
+                    x1_other, x2_other = x2_other, x1_other
+                    y1_other, y2_other = y2_other, y1_other
+                
+                # 检查角度是否相近（水平方向）
+                angle_diff = abs(current_line['angle'] - other_line['angle'])
+                if angle_diff > angle_threshold:
+                    continue
+                
+                # 检查Y坐标是否相近（水平线应该在同一水平线上）
+                y_diff = abs(current_line['y_avg'] - other_line['y_avg'])
+                if y_diff > max_gap:  # Y方向阈值严格一些
+                    continue
+                
+                # 检查端点距离
+                # 计算当前线段与其他线段四个端点的最小距离
+                # distances = [
+                #     self._point_to_segment_distance((x1_other, y1_other), merged_line['points']),
+                #     self._point_to_segment_distance((x2_other, y2_other), merged_line['points'])
+                # ]
+                # min_distance = min(distances)
+                
+                # 如果最小距离在阈值内，则合并线段
+                if True: # min_distance <= max_gap * 10:
+                    # 合并线段：取所有端点的最小X和最大X
+                    all_x = [x1_curr, x2_curr, x1_other, x2_other]
+                    all_y = [y1_curr, y2_curr, y1_other, y2_other]
+                    
+                    # 由于是水平线，我们使用加权平均计算Y坐标
+                    # 根据长度加权
+                    weight_curr = current_line['length']
+                    weight_other = other_line['length']
+                    merged_y = (y1_curr * weight_curr + y1_other * weight_other) / (weight_curr + weight_other)
+                    
+                    # 计算新的端点
+                    new_x1 = min(all_x)
+                    new_x2 = max(all_x)
+                    new_y1 = merged_y
+                    new_y2 = merged_y
+                    
+                    # 计算新的线段属性
+                    new_length = new_x2 - new_x1
+                    new_angle = 0  # 因为是水平线
+                    new_y_avg = merged_y
+                    
+                    # 更新合并后的线段
+                    merged_line['points'] = [(new_x1, new_y1), (new_x2, new_y2)]
+                    merged_line['length'] = new_length
+                    merged_line['angle'] = new_angle
+                    merged_line['y_avg'] = new_y_avg
+                    
+                    used_indices.add(j)
+            
+            merged_lines.append(merged_line)
+        
+        return merged_lines
+
+    # 基于延长线的合并函数：
+    def _merge_lines_by_extension(self, lines, end_threshold = 100, max_extension_gap=20, angle_threshold=10, y_threshold=10):
+        """
+        基于延长线距离合并线段
+        
+        参数:
+            lines: 线段列表，每个元素为字典，包含:
+                - 'points': [(x1,y1), (x2,y2)] 线段端点
+                - 'length': 线段长度
+                - 'angle': 线段角度(度)
+                - 'y_avg': 线段平均Y坐标
+            end_threshold: 端点之间的最近距离的阈值
+            max_extension_gap: 延长线之间的最大允许距离(像素)
+            angle_threshold: 角度差异阈值(度)
+            y_threshold: Y坐标差异阈值(像素)，用于水平线
+            
+        返回:
+            合并后的线段列表
+        """
+        if not lines:
+            return []
+        
+        # 按X坐标排序（对于水平线）
+        lines_sorted = sorted(lines, key=lambda l: min(l['points'][0][0], l['points'][1][0]))
+        
+        merged_lines = []
+        used_indices = set()
+        
+        for i in range(len(lines_sorted)):
+            if i in used_indices:
+                continue
+                
+            current_line = lines_sorted[i]
+            (x1_curr, y1_curr), (x2_curr, y2_curr) = current_line['points']
+            
+            # 确定当前线段的左右端点
+            if x1_curr > x2_curr:
+                x1_curr, x2_curr = x2_curr, x1_curr
+                y1_curr, y2_curr = y2_curr, y1_curr
+            
+            current_angle = current_line['angle']
+            
+            # 计算当前线段的直线方程 (y = kx + b)
+            # 对于水平线，k接近0，y接近常数
+            if x2_curr != x1_curr:
+                k_curr = (y2_curr - y1_curr) / (x2_curr - x1_curr)
+                b_curr = y1_curr - k_curr * x1_curr
+                is_vertical = False
+            else:
+                # 垂直线（应该很少，但处理一下）
+                is_vertical = True
+                x_const = x1_curr
+            
+            merged_group = [current_line]
+            used_indices.add(i)
+            
+            # 寻找可以与当前线段合并的其他线段
+            for j in range(i+1, len(lines_sorted)):
+                if j in used_indices:
+                    continue
+                    
+                other_line = lines_sorted[j]
+                (x1_other, y1_other), (x2_other, y2_other) = other_line['points']
+                
+                # 确定其他线段的左右端点
+                if x1_other > x2_other:
+                    x1_other, x2_other = x2_other, x1_other
+                    y1_other, y2_other = y2_other, y1_other
+                
+                other_angle = other_line['angle']
+                
+                # 1. 检查角度是否相近
+                angle_diff = abs(current_angle - other_angle)
+                if angle_diff > angle_threshold:
+                    continue
+                 
+                # 检查端点距离
+                # 计算当前线段与其他线段四个端点的最小距离
+                distances = [
+                    np.sqrt((x1_curr - x1_other)**2 + (y1_curr - y1_other)**2),
+                    np.sqrt((x1_curr - x2_other)**2 + (y1_curr - y2_other)**2),
+                    np.sqrt((x2_curr - x1_other)**2 + (y2_curr - y1_other)**2),
+                    np.sqrt((x2_curr - x2_other)**2 + (y2_curr - y2_other)**2)
+                ]
+                end_distance = min(distances)
+                if end_distance > end_threshold:
+                    continue
+
+                # 2. 检查Y坐标是否相近（对于接近水平的线）
+                y_diff = abs(current_line['y_avg'] - other_line['y_avg'])
+                if y_diff > y_threshold:
+                    continue
+                
+                # 3. 检查延长线之间的最近距离
+                if not is_vertical:
+                    # 计算其他线段的直线方程
+                    if x2_other != x1_other:
+                        k_other = (y2_other - y1_other) / (x2_other - x1_other)
+                        b_other = y1_other - k_other * x1_other
+                        
+                        # 计算两条直线之间的平均距离
+                        # 在两条线段的X重叠区域采样点计算距离
+                        overlap_x_start = max(x1_curr, x1_other)
+                        overlap_x_end = min(x2_curr, x2_other)
+                        
+                        if overlap_x_end > overlap_x_start:
+                            # 在重叠区域采样
+                            sample_points = np.linspace(overlap_x_start, overlap_x_end, num=10)
+                            distances = []
+                            for x in sample_points:
+                                y_curr = k_curr * x + b_curr
+                                y_other = k_other * x + b_other
+                                distances.append(abs(y_curr - y_other))
+                            
+                            avg_distance = np.mean(distances)
+                            
+                            if avg_distance <= max_extension_gap:
+                                merged_group.append(other_line)
+                                used_indices.add(j)
+                        else:
+                            # 没有X重叠，计算延长线距离
+                            # 计算从其他线段中点到当前直线的距离
+                            mid_x_other = (x1_other + x2_other) / 2
+                            mid_y_other = (y1_other + y2_other) / 2
+                            
+                            # 点到直线的距离公式
+                            distance = abs(k_curr * mid_x_other - mid_y_other + b_curr) / np.sqrt(k_curr**2 + 1)
+                            
+                            if distance <= max_extension_gap:
+                                merged_group.append(other_line)
+                                used_indices.add(j)
+                
+                else:
+                    # 垂直线的情况（较少见）
+                    if abs(x_const - (x1_other + x2_other) / 2) <= max_extension_gap:
+                        merged_group.append(other_line)
+                        used_indices.add(j)
+            
+            # 合并组内的所有线段
+            if merged_group:
+                merged_line = self._merge_line_group_extended(merged_group)
+                merged_lines.append(merged_line)
+        
+        return merged_lines
+
+    def _merge_line_group_extended(self, line_group):
+        """
+        合并一组共线或近似共线的线段
+        
+        参数:
+            line_group: 线段组列表
+            
+        返回:
+            合并后的线段字典
+        """
+        if not line_group:
+            return None
+        
+        # 收集所有端点和计算统计信息
+        all_points = []
+        all_angles = []
+        all_lengths = []
+        
+        for line in line_group:
+            all_points.extend(line['points'])
+            all_angles.append(line['angle'])
+            all_lengths.append(line['length'])
+        
+        # 计算加权平均角度（长线段权重更大）
+        total_length = sum(all_lengths)
+        if total_length > 0:
+            weighted_angles = [angle * length for angle, length in zip(all_angles, all_lengths)]
+            avg_angle = sum(weighted_angles) / total_length
+        else:
+            avg_angle = np.mean(all_angles)
+        
+        # 提取所有点的X和Y坐标
+        all_x = [p[0] for p in all_points]
+        all_y = [p[1] for p in all_points]
+        
+        # 对于接近水平的线（角度小于15度），使用线性回归拟合最佳水平线
+        if avg_angle < 15:
+            # 线性回归拟合所有点，得到最佳拟合直线
+            A = np.vstack([all_x, np.ones(len(all_x))]).T
+            k, b = np.linalg.lstsq(A, all_y, rcond=None)[0]
+            
+            # 使用拟合直线上的点作为合并后的线段端点
+            min_x, max_x = min(all_x), max(all_x)
+            start_y = k * min_x + b
+            end_y = k * max_x + b
+            
+            start_point = (int(min_x), int(start_y))
+            end_point = (int(max_x), int(end_y))
+            
+            new_length = np.sqrt((max_x - min_x)**2 + (end_y - start_y)**2)
+            new_y_avg = (start_y + end_y) / 2
+        else:
+            # 对于非水平线，使用最小二乘法拟合直线
+            A = np.vstack([all_x, np.ones(len(all_x))]).T
+            k, b = np.linalg.lstsq(A, all_y, rcond=None)[0]
+            
+            # 找到所有点在拟合直线上的投影
+            projected_points = []
+            for x, y in zip(all_x, all_y):
+                # 计算点到直线的投影
+                proj_x = x
+                proj_y = k * x + b
+                projected_points.append((proj_x, proj_y))
+            
+            # 找到投影点的边界
+            proj_x = [p[0] for p in projected_points]
+            proj_y = [p[1] for p in projected_points]
+            
+            # 找到主方向上的起点和终点
+            # 计算主成分方向
+            points_array = np.array(projected_points)
+            if len(points_array) > 1:
+                # 找到主方向上的两个极端点
+                diff = points_array - points_array.mean(axis=0)
+                cov = diff.T @ diff / len(points_array)
+                eigvals, eigvecs = np.linalg.eig(cov)
+                
+                # 主方向
+                main_dir = eigvecs[:, np.argmax(eigvals)]
+                
+                # 在所有点上的投影值
+                projections = points_array @ main_dir
+                
+                # 找到最小和最大投影对应的点
+                min_idx = np.argmin(projections)
+                max_idx = np.argmax(projections)
+                
+                start_point = tuple(points_array[min_idx].astype(int))
+                end_point = tuple(points_array[max_idx].astype(int))
+            else:
+                start_point = (int(min(all_x)), int((min(all_y) + max(all_y)) / 2))
+                end_point = (int(max(all_x)), int((min(all_y) + max(all_y)) / 2))
+            
+            new_length = np.sqrt((end_point[0] - start_point[0])**2 + (end_point[1] - start_point[1])**2)
+            new_y_avg = (start_point[1] + end_point[1]) / 2
+        
+        return {
+            'points': [start_point, end_point],
+            'length': new_length,
+            'angle': avg_angle,
+            'y_avg': new_y_avg
+        }
+
+    def _calculate_line_distance(self, line1, line2):
+        """
+        计算两条线段延长线之间的最近距离
+        
+        参数:
+            line1, line2: 线段字典，包含'points'键
+            
+        返回:
+            两条线段延长线之间的最近距离
+        """
+        (x1_1, y1_1), (x2_1, y2_1) = line1['points']
+        (x1_2, y1_2), (x2_2, y2_2) = line2['points']
+        
+        # 确定每条线段的左右端点
+        if x1_1 > x2_1:
+            x1_1, x2_1 = x2_1, x1_1
+            y1_1, y2_1 = y2_1, y1_1
+        
+        if x1_2 > x2_2:
+            x1_2, x2_2 = x2_2, x1_2
+            y1_2, y2_2 = y2_2, y1_2
+        
+        # 计算两条直线的方程
+        # 线段1的方程
+        if x2_1 != x1_1:
+            k1 = (y2_1 - y1_1) / (x2_1 - x1_1)
+            b1 = y1_1 - k1 * x1_1
+        else:
+            # 垂直线
+            k1 = None
+            x_const1 = x1_1
+        
+        # 线段2的方程
+        if x2_2 != x1_2:
+            k2 = (y2_2 - y1_2) / (x2_2 - x1_2)
+            b2 = y1_2 - k2 * x1_2
+        else:
+            # 垂直线
+            k2 = None
+            x_const2 = x1_2
+        
+        # 计算两条直线之间的平均距离
+        if k1 is not None and k2 is not None:
+            # 两条都是斜线
+            # 计算在X重叠区域的平均距离
+            overlap_x_start = max(x1_1, x1_2)
+            overlap_x_end = min(x2_1, x2_2)
+            
+            if overlap_x_end > overlap_x_start:
+                # 有重叠区域，在重叠区域采样计算平均距离
+                sample_points = np.linspace(overlap_x_start, overlap_x_end, num=20)
+                distances = []
+                for x in sample_points:
+                    y1 = k1 * x + b1
+                    y2 = k2 * x + b2
+                    distances.append(abs(y1 - y2))
+                
+                return np.mean(distances)
+            else:
+                # 没有重叠区域，计算两条直线之间的最短距离
+                # 平行线之间的距离公式：|b2 - b1| / sqrt(k^2 + 1)
+                if abs(k1 - k2) < 1e-6:  # 平行
+                    distance = abs(b2 - b1) / np.sqrt(k1**2 + 1)
+                    return distance
+                else:
+                    # 不平行的直线，计算交点处距离为0
+                    return 0.0
+        
+        elif k1 is None and k2 is not None:
+            # 线段1是垂直线，线段2是斜线
+            # 计算垂直线与斜线交点的Y坐标
+            y_on_line2 = k2 * x_const1 + b2
+            # 取垂直线中点的Y坐标
+            y_mid_line1 = (y1_1 + y2_1) / 2
+            return abs(y_on_line2 - y_mid_line1)
+        
+        elif k1 is not None and k2 is None:
+            # 线段1是斜线，线段2是垂直线
+            y_on_line1 = k1 * x_const2 + b1
+            y_mid_line2 = (y1_2 + y2_2) / 2
+            return abs(y_on_line1 - y_mid_line2)
+        
+        else:
+            # 两条都是垂直线
+            return abs(x_const1 - x_const2)
 
     # ==============================================================
     # ✅ ✅ ✅ 【直线检测算法完整版】_depth_segment_find_horizontal_line
@@ -328,74 +782,86 @@ class RGBDDetector:
     def _depth_segment_find_horizontal_line(self, depth_img, use_feed_roi=True):
         regions = []
         h, w = depth_img.shape
-
+        
         # 深度图预处理
         depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
-        depth_filtered = cv2.GaussianBlur(depth_filtered, (3, 3), self.gaussian_sigma)
-
+        depth_filtered = cv2.GaussianBlur(depth_filtered, (3,3), self.gaussian_sigma)
+        
         # 选择使用的ROI（上料ROI/其他ROI）
         if use_feed_roi:
             roi_x = self.feed_roi_x
             roi_y = self.feed_roi_y
             roi_w = self.feed_roi_w
             roi_h = self.feed_roi_h
+            min_length = self.feed_min_length
         else:
             roi_x = self.unload_roi_x
             roi_y = self.unload_roi_y
             roi_w = self.unload_roi_w
             roi_h = self.unload_roi_h
-
+            min_length = self.unload_min_length
+        
         # 限定ROI区域
         roi_x_start = max(roi_x, 0)
         roi_x_end = min(roi_x + roi_w, w)
         roi_y_start = max(roi_y, 0)
         roi_y_end = min(roi_y + roi_h, h)
-
+        
         # ✅ 提取ROI区域
         roi_depth = depth_filtered[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
         roi_h, roi_w = roi_depth.shape
-
+        
         # ✅ 步骤1：创建深度边缘图（用于直线检测）
         # 将深度图转换为8位灰度图用于边缘检测
         depth_normalized = cv2.normalize(roi_depth, None, 0, 255, cv2.NORM_MINMAX)
         depth_normalized = depth_normalized.astype(np.uint8)
+        # cv2.imshow("depth_normalized", depth_normalized) 
 
         # 使用Canny边缘检测（深度跳变处产生边缘）
         edges = cv2.Canny(depth_normalized, 10, 30)
-
+        # sobelx = cv2.Sobel(depth_normalized, cv2.CV_64F, 0, 1)
+        # edges = cv2.convertScaleAbs(sobelx)   # 转回uint8
+        # ret, edges = cv2.threshold(edges, 10, 255, cv2.THRESH_BINARY)
+        # 定义 3x3 矩形结构元素
+        kernel = np.ones((5, 1), np.uint8)
+        # 执行一次膨胀
+        edges = cv2.dilate(edges, kernel, iterations=1)
+        # edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+        # cv2.imshow("edge", edges)
+        
         # ✅ 步骤2：霍夫直线检测
-        lines = cv2.HoughLinesP(edges,
-                                rho=1,
-                                theta=np.pi / 180,
-                                threshold=50,
-                                minLineLength=roi_w * 0.3,  # 直线最小长度（ROI宽度的30%）
-                                maxLineGap=30)
-
+        lines = cv2.HoughLinesP(edges, 
+                            rho=1, 
+                            theta=np.pi/180, 
+                            threshold=10, 
+                            minLineLength=roi_w * 0.1,  # 直线最小长度（ROI宽度的30%）
+                            maxLineGap=10)
+        
         # ✅ 步骤3：筛选水平直线
         horizontal_lines = []
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-
+                
                 # 计算直线角度（排除垂直线）
                 if x2 != x1:  # 避免除以零
                     angle = np.arctan2(abs(y2 - y1), abs(x2 - x1)) * 180 / np.pi
-
+                    
                     # 筛选接近水平的直线（角度小于阈值）
                     if angle < 15:  # 小于15度视为水平
                         # 计算直线长度
-                        length = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-
+                        length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                        
                         # 确保直线足够长
                         if length > roi_w * 0.1:  # 至少ROI宽度的20%
                             horizontal_lines.append({
-                                'points': [(x1 + roi_x_start, y1 + roi_y_start),
-                                           (x2 + roi_x_start, y2 + roi_y_start)],
+                                'points': [(x1 + roi_x_start, y1 + roi_y_start), 
+                                        (x2 + roi_x_start, y2 + roi_y_start)],
                                 'length': length,
                                 'angle': angle,
                                 'y_avg': (y1 + y2) / 2 + roi_y_start
                             })
-
+        
         # ✅ 步骤4：根据排序规则选择目标直线
         target_line = None
         if horizontal_lines:
@@ -406,60 +872,109 @@ class RGBDDetector:
             elif self.sort_rule == SortRule.SORT_BY_Y_DESC:
                 # 从下到上：选择Y坐标最大的直线
                 horizontal_lines.sort(key=lambda l: l['y_avg'], reverse=True)
-
+            
             # 选择第一条符合条件的直线
-            target_line = horizontal_lines[0]
+            #target_line = horizontal_lines[0]
+
+        debug = 0
+        if debug == 1:
+            if len(depth_normalized.shape) == 2:
+                depth_bgr = cv2.cvtColor(depth_normalized, cv2.COLOR_GRAY2BGR)
+
+            for target_line in horizontal_lines:
+                (x1, y1), (x2, y2) = target_line['points']
+                cv2.line(depth_bgr, (int(x1-roi_x_start),int(y1-roi_y_start)), (int(x2-roi_x_start),int(y2-roi_y_start)), (0,255,0), 1)
+
+            cv2.imshow("raw_line", depth_bgr)
+
+        # 合并同方向线段
+        # ✅ 【新增步骤】合并同方向线段
+        if horizontal_lines:
+            # 合并接近的线段
+            # horizontal_lines = self._merge_nearby_lines(horizontal_lines, max_gap=30, angle_threshold=20)
+            
+            # 使用延长线距离进行合并
+            horizontal_lines = self._merge_lines_by_extension(
+                horizontal_lines, 
+                end_threshold = 50,
+                max_extension_gap=25,     # 延长线最大距离阈值
+                angle_threshold=15,        # 角度差异阈值
+                y_threshold=50            # Y坐标差异阈值
+            )
+            # 对结果二次合并 
+            horizontal_lines = self._merge_lines_by_extension(
+                horizontal_lines, 
+                end_threshold = 250,
+                max_extension_gap=25,     # 延长线最大距离阈值
+                angle_threshold=15,        # 角度差异阈值
+                y_threshold=50            # Y坐标差异阈值
+            )
+            print(f"合并后线段数量: {len(horizontal_lines)}")
 
         # ✅ 步骤5：从直线提取像素点并构造region
-        if target_line:
+        
+        if debug == 1:
+            if len(depth_normalized.shape) == 2:
+                depth_bgr = cv2.cvtColor(depth_normalized, cv2.COLOR_GRAY2BGR)
+            
+        for target_line in horizontal_lines:
+        #if target_line:
             # 提取直线端点
             (x1, y1), (x2, y2) = target_line['points']
+            
+            if debug == 1:
+                cv2.line(depth_bgr, (int(x1-roi_x_start),int(y1-roi_y_start)), (int(x2-roi_x_start),int(y2-roi_y_start)), (random.randint(40,255), random.randint(40,255), random.randint(40,255)), 2)
+
+            distance = np.sqrt((x1 - x2)**2 + (y1 -y2)**2)
+            if distance < min_length:
+                continue
 
             # ✅ 计算直线的几何中点（修复点）
             mid_x = int((x1 + x2) / 2)
             mid_y = int((y1 + y2) / 2)
             edge_center_point = (mid_x, mid_y)
-
+            
             # ✅ 从直线上提取有效像素点
             target_pixels = []
             target_depth_sum = 0.0
             valid_pixel_count = 0
-
+            
             # 生成直线上的采样点（使用Bresenham算法）
             line_points = self._bresenham_line(x1, y1, x2, y2)
-
+            
             # 收集直线及其附近的有效像素点
             for (x, y) in line_points:
                 # 检查是否在ROI和图像范围内
-                if (roi_x_start <= x < roi_x_end and
-                        roi_y_start <= y < roi_y_end):
-
-                    curr_depth = depth_filtered[y, x]
+                if (roi_x_start <= x < roi_x_end and 
+                    roi_y_start <= y < roi_y_end):
+                    
+                    curr_depth = depth_filtered[int(y), int(x)]
                     # 深度有效性检查
-                    if (curr_depth != self.depth_invalid and
-                            self.feed_depth_min <= curr_depth <= self.feed_depth_max):
+                    if (curr_depth != self.depth_invalid and 
+                        self.feed_depth_min <= curr_depth <= self.feed_depth_max):
+                        
                         target_pixels.append((x, y))
                         target_depth_sum += curr_depth
                         valid_pixel_count += 1
-
+            
             # 如果有效像素数足够
-            if valid_pixel_count > 200:  # 与原代码一致的最小像素数
+            if valid_pixel_count > roi_w * 0.2: # 100:  # 最小像素数
                 area = valid_pixel_count
                 avg_depth = int(target_depth_sum / area) if area > 0 else self.feed_depth_min
-
+                
                 # 计算像素中心点
                 cx = int(np.mean([p[0] for p in target_pixels]))
                 cy = int(np.mean([p[1] for p in target_pixels]))
                 pixel_center = (cx, cy)
-
+                
                 # 构造旋转矩形
-                pts = np.array(target_pixels, dtype=np.int32).reshape((-1, 1, 2))
+                pts = np.array(target_pixels, dtype=np.int32).reshape((-1,1,2))
                 rotated_rect = cv2.minAreaRect(pts)
                 rotate_angle = round(rotated_rect[2], 2)
-
+                
                 # 计算世界坐标
                 world_xyz = self._pixel2world(edge_center_point, avg_depth)
-
+                
                 # ✅ 构造region结构（与原结构完全一致）
                 regions.append({
                     "region_id": 1,
@@ -472,6 +987,9 @@ class RGBDDetector:
                     "avg_depth": avg_depth,
                     "color": (0, 0, 255)  # 固定红色，标识水平直线区域
                 })
+        
+        if debug == 1:
+            cv2.imshow("line", depth_bgr)
 
         # 排序（保留原逻辑）
         self._sort_regions(regions)
@@ -484,21 +1002,21 @@ class RGBDDetector:
         points = []
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
-
+        
         # 确定步进方向
         sx = 1 if x1 < x2 else -1
         sy = 1 if y1 < y2 else -1
-
+        
         # 初始化误差
         err = dx - dy
-
+        
         while True:
             points.append((x1, y1))
-
+            
             # 到达终点
             if x1 == x2 and y1 == y2:
                 break
-
+            
             e2 = 2 * err
             if e2 > -dy:
                 err -= dy
@@ -506,165 +1024,31 @@ class RGBDDetector:
             if e2 < dx:
                 err += dx
                 y1 += sy
-
+        
         return points
-
-    # ✅ 备选方案：使用更先进的LSD线段检测器
-    def _depth_segment_find_horizontal_line_lsd(self, depth_img):
-        """使用LSD（线段检测器）的版本"""
-        regions = []
-        h, w = depth_img.shape
-
-        # 深度图预处理
-        depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
-        depth_filtered = cv2.GaussianBlur(depth_filtered, (3, 3), self.gaussian_sigma)
-
-        # 限定ROI区域（使用上料ROI）
-        roi_x_start = max(self.feed_roi_x, 0)
-        roi_x_end = min(self.feed_roi_x + self.feed_roi_w, w)
-        roi_y_start = max(self.feed_roi_y, 0)
-        roi_y_end = min(self.feed_roi_y + self.feed_roi_h, h)
-
-        # ✅ 提取ROI区域
-        roi_depth = depth_filtered[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
-
-        # 转换为8位灰度图
-        depth_normalized = cv2.normalize(roi_depth, None, 0, 255, cv2.NORM_MINMAX)
-        depth_normalized = depth_normalized.astype(np.uint8)
-
-        # ✅ 使用LSD线段检测器
-        lsd = cv2.createLineSegmentDetector()
-        lines, width, prec, nfa = lsd.detect(depth_normalized)
-
-        # ✅ 筛选水平线段
-        horizontal_lines = []
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line.flatten()
-
-                # 计算线段角度
-                dx = x2 - x1
-                dy = y2 - y1
-                if dx != 0:
-                    angle = np.arctan2(abs(dy), abs(dx)) * 180 / np.pi
-
-                    # 筛选水平线段
-                    if angle < 15:  # 水平阈值
-                        length = np.sqrt(dx ** 2 + dy ** 2)
-
-                        if length > roi_depth.shape[1] * 0.05:  # 足够长
-                            horizontal_lines.append({
-                                'points': [(x1 + roi_x_start, y1 + roi_y_start),
-                                           (x2 + roi_x_start, y2 + roi_y_start)],
-                                'length': length,
-                                'angle': angle,
-                                'y_avg': (y1 + y2) / 2 + roi_y_start
-                            })
-
-        # ✅ 步骤4：根据排序规则选择目标直线
-        target_line = None
-        if horizontal_lines:
-            # 按Y坐标排序
-            if self.sort_rule == SortRule.SORT_BY_Y_ASC:
-                # 从上到下：选择Y坐标最小的直线
-                horizontal_lines.sort(key=lambda l: l['y_avg'])
-            elif self.sort_rule == SortRule.SORT_BY_Y_DESC:
-                # 从下到上：选择Y坐标最大的直线
-                horizontal_lines.sort(key=lambda l: l['y_avg'], reverse=True)
-
-            # 选择第一条符合条件的直线
-            target_line = horizontal_lines[0]
-
-        # ✅ 步骤5：从直线提取像素点并构造region
-        if target_line:
-            # 提取直线端点
-            (x1, y1), (x2, y2) = target_line['points']
-
-            # ✅ 计算直线的几何中点（修复点）
-            mid_x = int((x1 + x2) / 2)
-            mid_y = int((y1 + y2) / 2)
-            edge_center_point = (mid_x, mid_y)
-
-            # ✅ 从直线上提取有效像素点
-            target_pixels = []
-            target_depth_sum = 0.0
-            valid_pixel_count = 0
-
-            # 生成直线上的采样点（使用Bresenham算法）
-            line_points = self._bresenham_line(x1, y1, x2, y2)
-
-            # 收集直线及其附近的有效像素点
-            for (x, y) in line_points:
-                # 检查是否在ROI和图像范围内
-                if (roi_x_start <= x < roi_x_end and
-                        roi_y_start <= y < roi_y_end):
-
-                    curr_depth = depth_filtered[y, x]
-                    # 深度有效性检查
-                    if (curr_depth != self.depth_invalid and
-                            self.feed_depth_min <= curr_depth <= self.feed_depth_max):
-                        target_pixels.append((x, y))
-                        target_depth_sum += curr_depth
-                        valid_pixel_count += 1
-
-            # 如果有效像素数足够
-            if valid_pixel_count > 200:  # 与原代码一致的最小像素数
-                area = valid_pixel_count
-                avg_depth = int(target_depth_sum / area) if area > 0 else self.feed_depth_min
-
-                # 计算像素中心点
-                cx = int(np.mean([p[0] for p in target_pixels]))
-                cy = int(np.mean([p[1] for p in target_pixels]))
-                pixel_center = (cx, cy)
-
-                # 构造旋转矩形
-                pts = np.array(target_pixels, dtype=np.int32).reshape((-1, 1, 2))
-                rotated_rect = cv2.minAreaRect(pts)
-                rotate_angle = round(rotated_rect[2], 2)
-
-                # 计算世界坐标
-                world_xyz = self._pixel2world(edge_center_point, avg_depth)
-
-                # ✅ 构造region结构（与原结构完全一致）
-                regions.append({
-                    "region_id": 1,
-                    "pixel_center": pixel_center,
-                    "edge_center_point": edge_center_point,  # ✅ 直线的几何中点
-                    "world_xyz": world_xyz,
-                    "rotate_angle": rotate_angle,
-                    "rotated_rect": rotated_rect,
-                    "area": area,
-                    "avg_depth": avg_depth,
-                    "color": (0, 0, 255)  # 固定红色，标识水平直线区域
-                })
-
-        # 排序（保留原逻辑）
-        self._sort_regions(regions)
-        self.detected_regions = regions
-        return regions
 
     # ===================== 【新增】物料缓存台检测算法 =====================
     def _material_check(self, depth_img):
         """物料缓存台检测：基于ROI内平均深度判断是否有物料"""
         exists_flag = DetectStatus.NOTHING
         coords = [0.0, 0.0, 0.0, 0.0]
-
+        
         # 限定物料缓存台ROI范围
         h, w = depth_img.shape
         roi_x_start = max(self.material_roi_x, 0)
         roi_x_end = min(self.material_roi_x + self.material_roi_w, w)
         roi_y_start = max(self.material_roi_y, 0)
         roi_y_end = min(self.material_roi_y + self.material_roi_h, h)
-
+        
         # 提取ROI深度图
         roi_depth = depth_img[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
-
+        
         # 过滤无效深度值
         valid_depth_mask = (roi_depth != self.depth_invalid) & \
                            (roi_depth >= self.feed_depth_min) & \
                            (roi_depth <= self.feed_depth_max)
         valid_depth_values = roi_depth[valid_depth_mask]
-
+        
         if len(valid_depth_values) > 0:
             # 计算ROI内有效深度的平均值
             avg_depth = np.mean(valid_depth_values)
@@ -673,37 +1057,37 @@ class RGBDDetector:
             # 判断是否在物料深度范围内
             if self.material_depth_min <= avg_depth <= self.material_depth_max:
                 exists_flag = DetectStatus.EXIST
-
+                
                 # 计算ROI中心像素坐标
                 roi_center_x = roi_x_start + (roi_x_end - roi_x_start) // 2
                 roi_center_y = roi_y_start + (roi_y_end - roi_y_start) // 2
-
+                
                 # 转换为世界坐标
                 world_xyz = self._pixel2world((roi_center_x, roi_center_y), avg_depth)
                 x, y, z = world_xyz
                 r = 0.0  # 旋转角度默认0
-
+                
                 coords = [x, y, z, r]
-
+        
         return exists_flag, coords
 
-    # ===================== 【新增】下料算法 =====================
+    # ===================== 【修改后✅核心】下料算法：每层X1个，沿Y竖直并排 =====================
     def _unload_check(self, depth_img):
         """下料算法：识别可放置长条形产品的区域坐标"""
         exists_flag = DetectStatus.NOTHING
         coords = [0.0, 0.0, 0.0, 0.0]
-
+        
         # 1. 预处理深度图
         depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
-        depth_filtered = cv2.GaussianBlur(depth_filtered, (3, 3), self.gaussian_sigma)
-
+        depth_filtered = cv2.GaussianBlur(depth_filtered, (3,3), self.gaussian_sigma)
+        
         # 2. 限定下料ROI范围
         h, w = depth_img.shape
         roi_x_start = max(self.unload_roi_x, 0)
         roi_x_end = min(self.unload_roi_x + self.unload_roi_w, w)
         roi_y_start = max(self.unload_roi_y, 0)
         roi_y_end = min(self.unload_roi_y + self.unload_roi_h, h)
-
+        
         # 3. 生成每层的理论坐标
         layer_coords = []
         # 计算每层的基准深度（从底层开始）
@@ -711,18 +1095,22 @@ class RGBDDetector:
         for layer_idx in range(self.unload_layer_count):
             # 每层的深度偏移
             layer_depth = base_depth + layer_idx * self.unload_layer_height
-
+            
             # 计算每层第一个产品的X坐标（居中排列）
-            total_width = self.unload_item_count_per_layer * self.unload_item_width + \
-                          (self.unload_item_count_per_layer - 1) * self.unload_item_interval
-            start_x = roi_x_start + (roi_x_end - roi_x_start - total_width) // 2
-            start_y = roi_y_start + (roi_y_end - roi_y_start) // 2  # 层Y坐标居中
+            # total_width = self.unload_item_count_per_layer * self.unload_item_width + \
+            #               (self.unload_item_count_per_layer - 1) * self.unload_item_interval
+            # start_x = roi_x_start + (roi_x_end - roi_x_start - total_width) // 2
+            # start_y = roi_y_start + (roi_y_end - roi_y_start) // 2  # 层Y坐标居中
+            start_x = roi_x_start
+            start_y = roi_y_start
 
             # 生成该层所有产品的坐标
             for item_idx in range(self.unload_item_count_per_layer):
-                item_x = start_x + item_idx * (
-                            self.unload_item_width + self.unload_item_interval) + self.unload_item_width // 2
-                item_y = start_y
+                # item_x = start_x + item_idx * (self.unload_item_width + self.unload_item_interval) + self.unload_item_width // 2
+                # item_y = start_y
+                item_x = start_x + self.unload_item_width // 2
+                item_y = start_y + item_idx * (self.unload_item_height + self.unload_item_interval)
+                
                 layer_coords.append({
                     "layer_idx": layer_idx,
                     "item_idx": item_idx,
@@ -731,70 +1119,70 @@ class RGBDDetector:
                     "target_depth": layer_depth,
                     "is_empty": False
                 })
-
+        
         # 4. 检测每个位置是否为空（深度差超过阈值则视为空）
         empty_positions = []
         for pos in layer_coords:
             px = int(pos["pixel_x"])
             py = int(pos["pixel_y"])
-
+            
             # 检查像素坐标是否在有效范围内
             if roi_x_start <= px < roi_x_end and roi_y_start <= py < roi_y_end:
                 curr_depth = depth_filtered[py, px]
-
+                
                 # 判断是否为空：无效深度 或 深度差超过阈值
                 if (curr_depth == self.depth_invalid) or \
-                        (abs(curr_depth - pos["target_depth"]) > self.unload_depth_threshold):
+                   (abs(curr_depth - pos["target_depth"]) > self.unload_depth_threshold):
                     pos["is_empty"] = True
                     empty_positions.append(pos)
-
+        
         # 5. 找到第一个空余位置（优先低层，同层优先左侧）
         if empty_positions:
             # 按层号升序、同层按物品索引升序排序
             empty_positions.sort(key=lambda p: (p["layer_idx"], p["item_idx"]))
             first_empty = empty_positions[0]
-
+            
             exists_flag = DetectStatus.EXIST
-
+            
             # 计算该位置的世界坐标
             pixel_x = first_empty["pixel_x"]
             pixel_y = first_empty["pixel_y"]
             target_depth = first_empty["target_depth"]
-
+            
             world_xyz = self._pixel2world((pixel_x, pixel_y), target_depth)
             x, y, z = world_xyz
             r = 0.0  # 旋转角度默认0
-
+            
             # 叠加工具坐标偏移
             x += self.tool_coord_x
             y += self.tool_coord_y
             z += self.tool_coord_z
             r += self.tool_coord_r
-
+            
             coords = [x, y, z, r]
-
+        
         return exists_flag, coords
 
     # ===================== 【对外接口2 - 检测接口】核心 =====================
     def detect(self, ptype, rgb_img, depth_img):
         try:
             if not self.config_loaded:
-                return {"code": -1, "err_msg": "请先调用初始化函数加载配置"}
+                return {"code":-1, "err_msg":"请先调用初始化函数加载配置"}
             if depth_img is None or depth_img.dtype != np.uint16:
-                return {"code": -2, "err_msg": "深度图格式错误，必须是CV_16UC1单通道格式"}
-            if ptype < 1 or ptype > 4:
-                return {"code": -3, "err_msg": "ptype类型错误，仅支持1/2/3/4"}
-
+                return {"code":-2, "err_msg":"深度图格式错误，必须是CV_16UC1单通道格式"}
+            if ptype <1 or ptype>4:
+                return {"code":-3, "err_msg":"ptype类型错误，仅支持1/2/3/4"}
+            
             coords = [0.0, 0.0, 0.0, 0.0]
             exists_flag = DetectStatus.UNKNOWN
             regions = []
 
             # 分支处理不同检测类型
-            if ptype == PType.MATERIAL_CHECK:  # 物料缓存台
+            if ptype == PType.MATERIAL_CHECK: # 物料缓存台
                 exists_flag, coords = self._material_check(depth_img)
-            elif ptype == PType.IRON_CHIP_CHECK:  # 铁屑
+            elif ptype == PType.IRON_CHIP_CHECK: # 铁屑
                 exists_flag, coords = self._judge_detect_result(regions, ptype, rgb_img)
-            elif ptype == PType.FEED_CHECK:  # 上料
+            elif ptype == PType.FEED_CHECK: # 上料
                 regions = self._depth_segment_find_horizontal_line(depth_img, use_feed_roi=True)
                 if not regions:
                     exists_flag = DetectStatus.NOTHING
@@ -809,26 +1197,26 @@ class RGBDDetector:
                     z += self.tool_coord_z
                     r += self.tool_coord_r
                     coords = [x, y, z, r]
-            elif ptype == PType.UNLOAD_CHECK:  # 下料
+            elif ptype == PType.UNLOAD_CHECK: # 下料
                 exists_flag, coords = self._unload_check(depth_img)
 
             return {
-                "code": 0,
-                "result": {
-                    "ptype": ptype,
-                    "coords": coords,
+                "code":0,
+                "result":{
+                    "ptype":ptype,
+                    "coords":coords,
                     "exists": exists_flag
                 },
-                "err_msg": ""
+                "err_msg":""
             }
         except Exception as e:
-            return {"code": -99, "err_msg": f"检测异常: {str(e)}"}
+            return {"code":-99, "err_msg":f"检测异常: {str(e)}"}
 
     # 检测逻辑判断
     def _judge_detect_result(self, regions, ptype, rgb_img):
         coords = [0.0, 0.0, 0.0, 0.0]
         exists_flag = DetectStatus.UNKNOWN
-
+        
         if ptype == PType.IRON_CHIP_CHECK:
             has_chip, chip_boxes = self._yolov4_detect_chip(rgb_img)
             if has_chip:
@@ -836,7 +1224,7 @@ class RGBDDetector:
             else:
                 exists_flag = DetectStatus.NOTHING
             return exists_flag, coords
-
+        
         # 原有逻辑 完全不变
         if ptype == PType.MATERIAL_CHECK or ptype == PType.FEED_CHECK:
             if not regions:
@@ -844,7 +1232,7 @@ class RGBDDetector:
                 return exists_flag, coords
             else:
                 exists_flag = DetectStatus.EXIST
-
+        
         # 默认取排序后的第一个主区域作为目标
         main_region = regions[0]
         x, y, z = main_region["world_xyz"]
@@ -862,62 +1250,62 @@ class RGBDDetector:
     def draw_result(self, rgb, detect_res):
         draw_img = rgb.copy()
         if detect_res["code"] != 0 or not detect_res["result"]:
-            cv2.putText(draw_img, "DETECT ERR", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(draw_img, "DETECT ERR", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
             return draw_img
-
+        
         res = detect_res["result"]
         ptype = res["ptype"]
         coords = res["coords"]
         exists_flag = res["exists"]
-        x, y, z, r = coords
+        x,y,z,r = coords
 
         status_text = "EXIST" if exists_flag == DetectStatus.EXIST else "NOTHING"
-        status_color = (0, 255, 0) if exists_flag == DetectStatus.EXIST else (0, 0, 255)
-        cv2.putText(draw_img, f"STATUS: {status_text}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
-
+        status_color = (0,255,0) if exists_flag == DetectStatus.EXIST else (0,0,255)
+        cv2.putText(draw_img, f"STATUS: {status_text}", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
+        
         # 检测类型
-        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron"}
-        cv2.putText(draw_img, f"TYPE: {type_dict[ptype]}", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
+        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron" }
+        cv2.putText(draw_img, f"TYPE: {type_dict[ptype]}", (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+        
         # 绘制坐标信息
         coord_text = f"X:{x:.1f} Y:{y:.1f} Z:{z:.1f} R:{r:.1f}"
-        cv2.putText(draw_img, coord_text, (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
+        cv2.putText(draw_img, coord_text, (20,110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+        
         # 绘制对应ROI框
         if ptype == PType.MATERIAL_CHECK:
             # 物料缓存台ROI（绿色）
-            cv2.rectangle(draw_img, (self.material_roi_x, self.material_roi_y),
-                          (self.material_roi_x + self.material_roi_w, self.material_roi_y + self.material_roi_h),
-                          (0, 255, 0), 2)
-            cv2.putText(draw_img, "Material ROI", (self.material_roi_x + 5, self.material_roi_y + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.rectangle(draw_img, (self.material_roi_x, self.material_roi_y), 
+                         (self.material_roi_x+self.material_roi_w, self.material_roi_y+self.material_roi_h), 
+                         (0,255,0), 2)
+            cv2.putText(draw_img, "Material ROI", (self.material_roi_x+5, self.material_roi_y+20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
         elif ptype == PType.FEED_CHECK:
             # 上料ROI（蓝色）
-            cv2.rectangle(draw_img, (self.feed_roi_x, self.feed_roi_y),
-                          (self.feed_roi_x + self.feed_roi_w, self.feed_roi_y + self.feed_roi_h),
-                          (255, 0, 0), 2)
-            cv2.putText(draw_img, "Feed ROI", (self.feed_roi_x + 5, self.feed_roi_y + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+            cv2.rectangle(draw_img, (self.feed_roi_x, self.feed_roi_y), 
+                         (self.feed_roi_x+self.feed_roi_w, self.feed_roi_y+self.feed_roi_h), 
+                         (255,0,0), 2)
+            cv2.putText(draw_img, "Feed ROI", (self.feed_roi_x+5, self.feed_roi_y+20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,0), 2)
         elif ptype == PType.UNLOAD_CHECK:
             # 下料ROI（黄色）
-            cv2.rectangle(draw_img, (self.unload_roi_x, self.unload_roi_y),
-                          (self.unload_roi_x + self.unload_roi_w, self.unload_roi_y + self.unload_roi_h),
-                          (0, 255, 255), 2)
-            cv2.putText(draw_img, "Unload ROI", (self.unload_roi_x + 5, self.unload_roi_y + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            cv2.rectangle(draw_img, (self.unload_roi_x, self.unload_roi_y), 
+                         (self.unload_roi_x+self.unload_roi_w, self.unload_roi_y+self.unload_roi_h), 
+                         (0,255,255), 2)
+            cv2.putText(draw_img, "Unload ROI", (self.unload_roi_x+5, self.unload_roi_y+20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
         elif ptype == PType.IRON_CHIP_CHECK:
             # YOLO检测ROI（紫色）
-            cv2.rectangle(draw_img, (self.yolo_roi_x, self.yolo_roi_y),
-                          (self.yolo_roi_x + self.yolo_roi_w, self.yolo_roi_y + self.yolo_roi_h),
-                          (255, 0, 255), 2)
-            cv2.putText(draw_img, "YOLO ROI", (self.yolo_roi_x + 5, self.yolo_roi_y + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            cv2.rectangle(draw_img, (self.yolo_roi_x, self.yolo_roi_y), 
+                         (self.yolo_roi_x+self.yolo_roi_w, self.yolo_roi_y+self.yolo_roi_h), 
+                         (255,0,255), 2)
+            cv2.putText(draw_img, "YOLO ROI", (self.yolo_roi_x+5, self.yolo_roi_y+20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,255), 2)
             # 绘制YOLO铁屑检测框
             for (x1, y1, w, h, conf) in self.detect_iron_chips:
-                cv2.rectangle(draw_img, (x1, y1), (x1 + w, y1 + h), (0, 0, 255), 2)
-                cv2.putText(draw_img, f"{conf}", (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-
+                cv2.rectangle(draw_img, (x1, y1), (x1+w, y1+h), (0,0,255), 2)
+                cv2.putText(draw_img, f"{conf}", (x1, y1-5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 2)
+        
         return draw_img
 
     # ===================== 【核心优化 ✅ 重点】叠加 YOLO铁屑框+置信度+旋转矩形框+中心点+ROI框+所有信息 =====================
@@ -925,48 +1313,44 @@ class RGBDDetector:
         draw_img = rgb.copy()
         # 检测异常的情况 加双重判断
         if detect_res["code"] != 0 or not detect_res["result"]:
-            cv2.putText(draw_img, "DETECT ERR", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(draw_img, "DETECT ERR", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
             if detect_res["err_msg"]:
-                cv2.putText(draw_img, detect_res["err_msg"][:15], (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255),
-                            1)
+                cv2.putText(draw_img, detect_res["err_msg"][:15], (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 1)
             return draw_img
-
+        
         res = detect_res["result"]
         ptype = res["ptype"]
         coords = res["coords"]
         exists_flag = res["exists"]
-        x, y, z, r = coords
+        x,y,z,r = coords
 
         # 1. 绘制原有所有信息：状态、类型、坐标
         status_text = "EXIST" if exists_flag == DetectStatus.EXIST else "NOTHING"
-        status_color = (0, 255, 0) if exists_flag == DetectStatus.EXIST else (0, 0, 255)
-        cv2.putText(draw_img, f"STATUS: {status_text}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
+        status_color = (0,255,0) if exists_flag == DetectStatus.EXIST else (0,0,255)
+        cv2.putText(draw_img, f"STATUS: {status_text}", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
         # 检测类型
-        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron"}
-        cv2.putText(draw_img, f"TYPE: {type_dict[ptype]}", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron" }
+        cv2.putText(draw_img, f"TYPE: {type_dict[ptype]}", (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
         coord_text = f"X:{x:.1f} Y:{y:.1f} Z:{z:.1f} R:{r:.1f}"
-        cv2.putText(draw_img, coord_text, (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(draw_img, coord_text, (20,110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
         # 2. 绘制对应ROI框
         roi_info = {
-            PType.MATERIAL_CHECK: ("Material ROI", (self.material_roi_x, self.material_roi_y),
-                                   (self.material_roi_x + self.material_roi_w,
-                                    self.material_roi_y + self.material_roi_h), (0, 255, 0)),
-            PType.FEED_CHECK: ("Feed ROI", (self.feed_roi_x, self.feed_roi_y),
-                               (self.feed_roi_x + self.feed_roi_w, self.feed_roi_y + self.feed_roi_h), (255, 0, 0)),
-            PType.UNLOAD_CHECK: ("Unload ROI", (self.unload_roi_x, self.unload_roi_y),
-                                 (self.unload_roi_x + self.unload_roi_w, self.unload_roi_y + self.unload_roi_h),
-                                 (0, 255, 255)),
-            PType.IRON_CHIP_CHECK: ("YOLO ROI", (self.yolo_roi_x, self.yolo_roi_y),
-                                    (self.yolo_roi_x + self.yolo_roi_w, self.yolo_roi_y + self.yolo_roi_h),
-                                    (255, 0, 255))
+            PType.MATERIAL_CHECK: ("Material ROI", (self.material_roi_x, self.material_roi_y), 
+                                  (self.material_roi_x+self.material_roi_w, self.material_roi_y+self.material_roi_h), (0,255,0)),
+            PType.FEED_CHECK: ("Feed ROI", (self.feed_roi_x, self.feed_roi_y), 
+                              (self.feed_roi_x+self.feed_roi_w, self.feed_roi_y+self.feed_roi_h), (255,0,0)),
+            PType.UNLOAD_CHECK: ("Unload ROI", (self.unload_roi_x, self.unload_roi_y), 
+                                (self.unload_roi_x+self.unload_roi_w, self.unload_roi_y+self.unload_roi_h), (0,255,255)),
+            PType.IRON_CHIP_CHECK: ("YOLO ROI", (self.yolo_roi_x, self.yolo_roi_y), 
+                                   (self.yolo_roi_x+self.yolo_roi_w, self.yolo_roi_y+self.yolo_roi_h), (255,0,255))
         }
         if ptype in roi_info:
             roi_name, roi_start, roi_end, roi_color = roi_info[ptype]
             # 绘制ROI框
             cv2.rectangle(draw_img, roi_start, roi_end, roi_color, 2)
-            cv2.putText(draw_img, roi_name, (roi_start[0] + 5, roi_start[1] + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, roi_color, 2)
+            cv2.putText(draw_img, roi_name, (roi_start[0]+5, roi_start[1]+20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, roi_color, 2)
 
         # 3. 绘制旋转矩形框（仅上料检测）
         if ptype == PType.FEED_CHECK and len(self.detected_regions) > 0:
@@ -974,20 +1358,20 @@ class RGBDDetector:
             rotated_rect = region["rotated_rect"]
             box = cv2.boxPoints(rotated_rect)
             box = np.int32(box)
-            cv2.drawContours(draw_img, [box], 0, (0, 0, 255), 2)
-
+            cv2.drawContours(draw_img, [box], 0, (0,0,255), 2)
+            
             # 绘制中心点
             cx, cy = region["pixel_center"]
-            cv2.circle(draw_img, (cx, cy), 5, (0, 255, 0), -1)
-            cv2.putText(draw_img, f"Center ({cx},{cy})", (cx + 10, cy),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.circle(draw_img, (cx, cy), 5, (0,255,0), -1)
+            cv2.putText(draw_img, f"Center ({cx},{cy})", (cx+10, cy), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
 
         # 4. 绘制YOLO铁屑检测框（仅铁屑检测）
         if ptype == PType.IRON_CHIP_CHECK and len(self.detect_iron_chips) > 0:
             for (x1, y1, w, h, conf) in self.detect_iron_chips:
-                cv2.rectangle(draw_img, (x1, y1), (x1 + w, y1 + h), (0, 0, 255), 2)
-                cv2.putText(draw_img, f"Chip {conf}", (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.rectangle(draw_img, (x1, y1), (x1+w, y1+h), (0,0,255), 2)
+                cv2.putText(draw_img, f"Chip {conf}", (x1, y1-5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 2)
 
         # 5. 绘制下料区域的理论放置位置（仅下料检测）
         if ptype == PType.UNLOAD_CHECK:
@@ -995,36 +1379,41 @@ class RGBDDetector:
             roi_x_start = max(self.unload_roi_x, 0)
             roi_x_end = min(self.unload_roi_x + self.unload_roi_w, w)
             roi_y_start = max(self.unload_roi_y, 0)
-
+            
             # 计算每层的理论坐标
             for layer_idx in range(self.unload_layer_count):
                 total_width = self.unload_item_count_per_layer * self.unload_item_width + \
                               (self.unload_item_count_per_layer - 1) * self.unload_item_interval
-                start_x = roi_x_start + (roi_x_end - roi_x_start - total_width) // 2
-                start_y = roi_y_start + (self.unload_roi_h // 2) + layer_idx * 20  # 分层显示
+                # start_x = roi_x_start + (roi_x_end - roi_x_start - total_width) // 2
+                # start_y = roi_y_start + (self.unload_roi_h // 2) + layer_idx * 20  # 分层显示
+                start_x = roi_x_start
+                start_y = roi_y_start
 
                 # 绘制该层所有产品位置
                 for item_idx in range(self.unload_item_count_per_layer):
-                    item_x = start_x + item_idx * (
-                                self.unload_item_width + self.unload_item_interval) + self.unload_item_width // 2
-                    item_y = start_y
+                    # item_x = start_x + item_idx * (self.unload_item_width + self.unload_item_interval) + self.unload_item_width // 2
+                    # item_y = start_y
+                    item_x = start_x
+                    item_y = start_y + item_idx * (self.unload_item_height + self.unload_item_interval)
 
                     # 绘制位置框
-                    cv2.rectangle(draw_img,
-                                  (item_x - self.unload_item_width // 2, item_y - 10),
-                                  (item_x + self.unload_item_width // 2, item_y + 10),
-                                  (255, 255, 0), 1)
+                    cv2.rectangle(draw_img, 
+                                #  (item_x - self.unload_item_width//2, item_y - 10),
+                                #  (item_x + self.unload_item_width//2, item_y + 10),
+                                 (item_x, item_y),
+                                 (item_x + self.unload_item_width, item_y + self.unload_item_height),
+                                 (255,255,0), 1)
                     # 标注层号和物品索引
-                    cv2.putText(draw_img, f"L{layer_idx}I{item_idx}", (item_x - 20, item_y - 15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
-
+                    cv2.putText(draw_img, f"L{layer_idx}I{item_idx}", (item_x-20, item_y-15), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
+            
             # 绘制第一个空余位置（红色高亮）
             if exists_flag == DetectStatus.EXIST:
                 target_x = int(coords[0] * self.camera_fx / coords[2] + self.camera_cx)
                 target_y = int(coords[1] * self.camera_fy / coords[2] + self.camera_cy)
-                cv2.circle(draw_img, (target_x, target_y), 8, (0, 0, 255), -1)
-                cv2.putText(draw_img, "TARGET", (target_x + 10, target_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                cv2.circle(draw_img, (target_x, target_y), 8, (0,0,255), -1)
+                cv2.putText(draw_img, "TARGET", (target_x+10, target_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
 
         return draw_img
 
@@ -1032,15 +1421,14 @@ class RGBDDetector:
         # 1. 深度图转【伪彩色热力图】核心步骤 (深度值归一化到0-255 + 上色)
         depth_show = depth_img.copy()
         # 归一化深度值到 0-255 (只对ROI内的有效深度做归一化，排除无效值)
-        # roi_x_start = max(self.roi_x, 0)
-        # roi_x_end = min(self.roi_x + self.roi_w, depth_show.shape[1])
-        # roi_y_start = max(self.roi_y, 0)
-        # roi_y_end = min(self.roi_y + self.roi_h, depth_show.shape[0])
-        # roi_depth = depth_show[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
+        #roi_x_start = max(self.roi_x, 0)
+        #roi_x_end = min(self.roi_x + self.roi_w, depth_show.shape[1])
+        #roi_y_start = max(self.roi_y, 0)
+        #roi_y_end = min(self.roi_y + self.roi_h, depth_show.shape[0])
+        #roi_depth = depth_show[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
         roi_depth = depth_show
         # 过滤无效深度值，只计算有效深度的最大最小值
-        valid_depth = roi_depth[
-            (roi_depth != self.depth_invalid) & (roi_depth >= self.feed_depth_min) & (roi_depth <= self.feed_depth_max)]
+        valid_depth = roi_depth[(roi_depth != self.depth_invalid) & (roi_depth >= self.feed_depth_min) & (roi_depth <= self.feed_depth_max)]
         if len(valid_depth) > 0:
             depth_min = valid_depth.min()
             depth_max = valid_depth.max()
@@ -1066,13 +1454,13 @@ if __name__ == "__main__":
         exit(-1)
     print("初始化成功！")
 
-    rgb_img = cv2.imread("./rgb_image.png")
-    depth_img = cv2.imread("./depth_1768713398274.png", cv2.IMREAD_UNCHANGED)
+    rgb_img = cv2.imread("./rgb_image.png")          
+    depth_img = cv2.imread("./depth_image.png", cv2.IMREAD_UNCHANGED)
 
     if rgb_img is None or depth_img is None:
         print("读取图像失败，请检查路径！")
         exit(-1)
-
+        
     if depth_img.dtype == np.uint8:
         depth_img = depth_img.astype(np.uint16) * 20
     elif depth_img.dtype == np.uint16:
@@ -1082,10 +1470,10 @@ if __name__ == "__main__":
     # 切换排序规则 → 联动扫描方向
     # detector.sort_rule = SortRule.SORT_BY_Y_DESC    # Y降序 → 从底部向上找水平直线
     # detector.sort_rule = SortRule.SORT_BY_Y_ASC   # Y升序 → 从顶部向下找水平直线
-
+    
     # ptype = PType.MATERIAL_CHECK
-    # ptype = PType.FEED_CHECK
-    ptype = PType.UNLOAD_CHECK
+    ptype = PType.FEED_CHECK
+    # ptype = PType.UNLOAD_CHECK
     detect_res = detector.detect(ptype, rgb_img, depth_img)
     print("检测结果:\n", json.dumps(detect_res, ensure_ascii=False, indent=2))
 

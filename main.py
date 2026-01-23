@@ -1,22 +1,5 @@
-# import sys
-# from src.utils.logger import logger
-# from src.controller.controller import Controller
-#
-# def main():
-#     logger.info("============== 系统启动 ==============")
-#     try:
-#         app = Controller()
-#         app.start()
-#     except Exception as e:
-#         logger.critical(f"系统崩溃: {e}", exc_info=True)
-#         sys.exit(1)
-#
-#
-# if __name__ == "__main__":
-#     main()
-
-
 import sys
+import os
 from PyQt5.QtWidgets import QApplication
 from src.ui.config_window import ConfigEditorUI
 from src.controller.controller_qt import Controller
@@ -26,6 +9,9 @@ from src.utils import get_base_path
 
 def main():
     logger.info(f"应用程序路径: {get_base_path()}")
+
+    # app_path = get_base_path()
+    # os.chdir(app_path)
 
     # 1. 启动 Qt 应用
     app = QApplication(sys.argv)

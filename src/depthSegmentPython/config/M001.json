@@ -6,30 +6,31 @@
     "camera_cx": 640.0,
     "camera_cy": 400.0,
     "depth_invalid": 0,
-
+	
 	//结果排序规则
     "sort_rule": 0,
-
+	
 	//预处理参数
 	"median_blur_kernel": 3,
     "gaussian_sigma": 1.2,
-
+	
 	//工具坐标
 	"tool_coord_x":0,
 	"tool_coord_y":0,
-	"tool_coord_z":-1000,
+	"tool_coord_z":0,
 	"tool_coord_r":0,
-
+	
 	// 上料ROI
 	"feed_roi_x": 250,
-	"feed_roi_y": 50,
+	"feed_roi_y": 60,
 	"feed_roi_w": 800,
-	"feed_roi_h": 500,
-
+	"feed_roi_h": 450,
+	
 	// 上料算法参数
 	"feed_depth_min": 50,
 	"feed_depth_max": 1700,
-
+	"feed_min_length": 500,
+	
 	// 物料缓存台ROI + 深度范围
 	"material_roi_x": 0,
 	"material_roi_y": 0,
@@ -37,13 +38,13 @@
 	"material_roi_h": 240,
 	"material_depth_min": 400,
 	"material_depth_max": 600,
-
+	
 	// YOLO检测ROI
 	"yolo_roi_x": 320,
 	"yolo_roi_y": 0,
 	"yolo_roi_w": 320,
 	"yolo_roi_h": 480,
-
+	
 	// YOLO算法配置
 	"yolov4_cfg_path": "./model/iron_chip.cfg",
     "yolov4_weights_path": "./model/iron_chip.weights",
@@ -52,17 +53,19 @@
     "yolov4_nms_threshold": 0.45,
 	"yolo_input_w": 608,
 	"yolo_input_h": 608,
-
+	
 	// 下料配置
-	"unload_roi_x": 0,
-	"unload_roi_y": 240,
-	"unload_roi_w": 640,
-	"unload_roi_h": 240,
-	"unload_layer_count": 3,
-	"unload_layer_height": 50,
-	"unload_item_count_per_layer": 5,
-	"unload_item_interval": 80,
-	"unload_item_width": 60,
-	"unload_depth_threshold": 20
+	"unload_roi_x": 250,
+	"unload_roi_y": 50,
+	"unload_roi_w": 800,
+	"unload_roi_h": 500,
+	"unload_layer_count": 6,
+	"unload_layer_height": 100,
+	"unload_item_count_per_layer": 8,
+	"unload_item_interval": 10,
+	"unload_item_width": 600,
+	"unload_item_height": 60,
+	"unload_depth_threshold": 20,
+	"unload_min_length": 500
 }
 

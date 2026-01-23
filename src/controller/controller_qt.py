@@ -403,7 +403,7 @@ class Controller(QThread):
         # 如果这一批里都没指定 (比如全是视觉点)，那就保持 None，后续走自动逻辑
         for i in range(max_batch):
             # 发送一个无意义的读取，仅仅为了保持 TCP 连接活跃
-            self.plc.read_holding_registers(0x40000, 1)
+            self.plc.read_holding_registers(const.ADDR_FIRST, 1)
 
             addr_j1, addr_j2, addr_j3, addr_j4, addr_vel, addr_acc = const.point_addresses[i]
 
@@ -460,7 +460,7 @@ class Controller(QThread):
 
                     if ik_res:
                         # 发送一个无意义的读取，仅仅为了保持 TCP 连接活跃
-                        self.plc.read_holding_registers(0x40000, 1)
+                        self.plc.read_holding_registers(const.ADDR_FIRST, 1)
 
                         # 写入浮点数 (关节角度/位置)
                         self.plc.write_float(addr_j1, ik_res['the1'])
@@ -830,11 +830,12 @@ class Controller(QThread):
         return 11
 
     # 辅助：阻塞监听 PLC 寄存器直到变为指定值 (支持超时，但等待复位时通常超时时间设很长或无限)
-    def wait_for_plc_val(self, addr, target_val, timeout=10.0):
+    def wait_for_plc_val(self, addr, target_val, timeout=7200.0):
         start_time = time.time()
+        logger.info(f"阻塞监听PLC，开始时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
         while self.running:
             # 发送一个无意义的读取，仅仅为了保持 TCP 连接活跃
-            self.plc.read_holding_registers(0x40000, 1)
+            self.plc.read_holding_registers(const.ADDR_FIRST, 1)
 
             # 1. 优先检查急停
             if self.check_estop():
@@ -844,9 +845,12 @@ class Controller(QThread):
             # 暂停检查, 直到恢复才继续运行；暂停恢复后，重置 start_time，给足时间让机械臂继续走
             if self.check_and_handle_pause():
                 start_time = time.time()
+                logger.info(f"阻塞监听PLC，暂停恢复，重置开始时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
 
+            time_consume = time.time() - start_time
+            logger.info(f"阻塞监听PLC，耗时 {time_consume} s")
             # 如果 timeout < 0，则无限等待
-            if timeout > 0 and (time.time() - start_time > timeout):
+            if timeout > 0 and (time_consume > timeout):
                 logger.error(f"等待PLC地址 {hex(addr)} 变为 {target_val} 超时")
                 return False
 
@@ -890,10 +894,10 @@ class Controller(QThread):
         self.plc.write_register(process_addr, 11)
 
         # 5. 等待到位 (12), timeout=-1表示无线等待
-        if not self.wait_for_plc_val(process_addr, 12, timeout=10):
+        if not self.wait_for_plc_val(process_addr, 12, timeout=7200):
             if self.check_estop(): return False  # 再次确认是否因急停退出
 
-            logger.error("等待到位超时")
+            logger.error(f"执行移动片段 -> {target_name} 等待到位超时")
             return False
 
         # 6. 更新内存中的位置记录
@@ -1074,6 +1078,8 @@ class Controller(QThread):
                 # 这会处理插值、发送、等待12
                 if not self._move_segment_to_target(process_addr=process_addr, start_point=start_point,
                                                     target_point=end_point):
+                    target_name = end_point.get("name", "Temp_Point")
+                    logger.error(f"移动到 {target_name} 失败，流程异常终止")
                     return False  # 移动失败(如急停)，直接退出
 
                 # 2. 拍照逻辑处理
@@ -1097,7 +1103,7 @@ class Controller(QThread):
                     logger.warning("视觉/流程 NG (16)，等待复位 (20)...")
 
                     # 等待 PLC 复位信号
-                    if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
                         logger.info("收到 20，重试当前步骤")
                         # 这里的 continue 会导致重新执行 _move_segment_to_target
                         # 也就是重新走到 end_point，然后重新触发拍照
@@ -1146,7 +1152,7 @@ class Controller(QThread):
                 logger.info(f"坐标发送成功，发送响应11")
 
                 # 5. 等待到位
-                if not self.wait_for_plc_val(process_addr, 12, timeout=10):
+                if not self.wait_for_plc_val(process_addr, 12, timeout=7200):
                     logger.error("等待机械臂到位超时")
                     return False
 
@@ -1187,7 +1193,7 @@ class Controller(QThread):
                 else:
                     self.plc.write_register(process_addr, 16)
                     # 等待 20 复位...
-                    if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
                         continue
                     else:
                         return False

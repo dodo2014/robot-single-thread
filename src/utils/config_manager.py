@@ -3,6 +3,7 @@ import os
 import sys
 from src.utils.logger import logger
 from .path_helper import get_config_path, get_base_path, get_vision_data_path
+# from src.utils.path_helper import get_config_path, get_base_path, get_vision_data_path
 
 # 获取当前程序运行的根目录
 # def get_app_path():
@@ -90,3 +91,19 @@ class ConfigManager:
     # 当前产品型号
     def get_current_product_model(self):
         return self.data.get("product_config", {}).get("current_model", "Unknown")
+
+    def get_current_tool_model(self):
+        current_model = self.data.get("tools", {}).get("current_model", "")
+        if current_model:
+            for model in self.data.get("tools", {}).get("models", []):
+                if model.get("name") == current_model:
+                    return model
+        return {}
+
+# def main():
+#     cfg = ConfigManager()
+#     tool_model = cfg.get_current_tool_model()
+#     print(tool_model)
+#
+# if __name__ == "__main__":
+#     main()

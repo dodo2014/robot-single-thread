@@ -34,6 +34,8 @@ point_interpolated_num = 7
 photo_trigger_take = 1  # 拍照
 photo_trigger_depth = 2  # 深度
 
+ADDR_FIRST = 0x40000
+
 # 实时反馈地址定义 (Float32, 每个占用2个寄存器)
 ADDR_FEEDBACK_J1 = 0x400BE
 ADDR_FEEDBACK_J2 = 0x400C0

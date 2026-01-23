@@ -1,4 +1,21 @@
 import pathlib
+import sys
+
+
+class Tee:
+    """一个简单的 Tee 类，用于同时输出到控制台和文件"""
+
+    def __init__(self, file):
+        self.file = file
+        self.stdout = sys.stdout
+
+    def write(self, message):
+        self.stdout.write(message)
+        self.file.write(message)
+
+    def flush(self):
+        self.stdout.flush()
+        self.file.flush()
 
 
 def print_dir_tree(root_path=".", exclude_dirs=None, indent=""):
@@ -45,6 +62,15 @@ if __name__ == "__main__":
     # 排除 .git, .venv 和你不想看到的目录
     exclude = [".git", ".venv", "__pycache__", "build", "dist", ".uv", ".idea"]
 
-    print(f"当前目录结构 ({pathlib.Path('.').absolute()}):")
-    print(".")
-    print_dir_tree(".", exclude_dirs=exclude)
+    # 打开文件并设置 Tee 输出（同时输出到控制台和文件）
+    with open("tree.txt", "w", encoding="utf-8") as f:
+        # 将标准输出重定向到 Tee 实例
+        sys.stdout = Tee(f)
+
+        try:
+            print(f"当前目录结构 ({pathlib.Path('.').absolute()}):")
+            print(".")
+            print_dir_tree(".", exclude_dirs=exclude)
+        finally:
+            # 恢复标准输出
+            sys.stdout = sys.stdout.stdout
