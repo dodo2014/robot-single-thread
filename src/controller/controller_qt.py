@@ -6,6 +6,7 @@ from src.core.trajectory import TrajectoryV2
 from src.consts import const
 # from src.vision.jxbpipeline import VisionSystem
 from src.vision.detect_algo import DetectAlgoService
+from src.core.tool import compute_gripper_target
 from PyQt5.QtCore import QThread, pyqtSignal
 import time
 import json
@@ -92,14 +93,14 @@ class Controller(QThread):
                 self.loop_once()
                 # 轮询间隔
                 # time.sleep(2)
-                self.msleep(1500)  # QThread 推荐用 msleep (毫秒)
+                self.msleep(500)  # QThread 推荐用 msleep (毫秒)
             except KeyboardInterrupt:
                 logger.info("用户停止程序")
                 self.running = False
             except Exception as e:
                 logger.error(f"主循环异常: {e}", exc_info=True)
                 # time.sleep(10)
-                self.msleep(1500)
+                self.msleep(500)
 
     # 停止方法
     def stop_service(self):
@@ -904,6 +905,41 @@ class Controller(QThread):
         self.last_motion_end_point = target_point
         return True
 
+    def transform_tool_coord(self, coord):
+        robot_params = self.robot_params
+
+        # 1. 获取配置
+        tool_cfg = self.cfg_manager.get_current_tool_model()
+        cam_cfg = tool_cfg.get("camera", {})
+        grip_cfg = tool_cfg.get("main_gripper", {})  # 获取这组夹爪的配置
+
+        # 2. 准备 Offset 参数
+        camera_offset = [cam_cfg.get("offset_x", 0), cam_cfg.get("offset_y", 0)]
+
+        # 【关键】这里的 Offset 是 两个夹爪的连线中点 相对于 电机中心 的偏移
+        gripper_offset = [grip_cfg.get("offset_x", 0), grip_cfg.get("offset_y", 0)]
+        z_diff = grip_cfg.get("z_diff", 0)
+
+        real_time_point = self.get_realtime_point()
+
+        vision_data = coord
+        robot_state = self.last_axis_status
+        robot_joints = self.last_joint_status
+        elbow_config = real_time_point.get("elbow_config", "elbow_up")
+
+        # 4. 调用计算
+        target_coords = compute_gripper_target(
+            camera_data=vision_data,
+            robot_state=robot_state,
+            elbow_config=elbow_config,
+            robot_joints=robot_joints,
+            camera_offset=camera_offset,
+            gripper_offset=gripper_offset,  # 传入中点偏移
+            z_diff=z_diff,
+            robot_params=robot_params,
+            cam_rotation=cam_cfg.get("rotation", 0)
+        )
+
     def handle_vision_recursive_v0(self, process_addr, point, loading=None, photo_type=const.photo_type_normal):
         """
         :param process_addr: 动作地址位
@@ -1032,7 +1068,12 @@ class Controller(QThread):
                 logger.error(f"视觉返回 NG: {res_status}")
                 return False
 
-            logger.info(f"视觉执行成功")
+            logger.info(f"视觉执行成功, 返回原始坐标 {coords}")
+
+            transform_coords = []
+
+            for coord in coords:
+
 
             # 只保存，不移动
             # eg：保存到 0x4008C (动作76) 的名下，供 77 读取

@@ -86,7 +86,7 @@ def compute_gripper_target(
         # 调用逆解算 J1, J2
         ik_res = ScaraKinematics().inverse_kinematics_v2(
             target_motor_x, target_motor_y, target_motor_z, 0,
-            robot_params['l1'], robot_params['l2'], 0, 0,
+            robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
             config_type=elbow_config
         )
 
@@ -133,7 +133,7 @@ def main():
     # robot_state: [x, y, z, r] (PLC反馈)
     # robot_joints: [j1, j2, j3, j4] (PLC反馈)
 
-    vision_data = [8.88, -167.69, 725, -4.010000000000005]
+    vision_data = [ 9.17, 31.59, 749, -3.8700000000000045]
     robot_state = [1324.2601, 7.8166, 20.0, -29.4765]
     elbow_config = 'elbow_up'
     robot_joints = [-14.82, 32.76, 20.00, 29.48]
