@@ -134,6 +134,11 @@ class ConfigEditorUI(QMainWindow):
         self.init_product_tab()
         tabs.addTab(self.tab_product, "产品配置")
 
+        # Tab 4: 工装夹具 ===
+        self.tab_tools = QWidget()
+        self.init_tools_tab()
+        tabs.addTab(self.tab_tools, "工装夹具(Tools)")
+
         return tabs
 
     def init_global_tab(self):
@@ -351,6 +356,124 @@ class ConfigEditorUI(QMainWindow):
 
         layout.addStretch()
 
+
+    def init_tools_tab(self):
+        """初始化工装夹具配置 Tab (样式升级版)"""
+        layout = QVBoxLayout(self.tab_tools)
+        layout.setSpacing(20)  # 增加间距，使布局更舒展
+
+        # === 区域 1: 当前使用夹具 (只读展示 - 样式同步产品配置) ===
+        grp_current = QGroupBox("当前使用夹具")
+        layout_current = QVBoxLayout(grp_current)
+
+        self.lbl_current_tool = QLabel("未设置")
+        self.lbl_current_tool.setAlignment(Qt.AlignCenter)
+        # 黑色背景，黄色大字
+        self.lbl_current_tool.setStyleSheet("""
+            background-color: #333333; 
+            color: #FFEB3B; 
+            font-size: 24pt; 
+            font-weight: bold; 
+            border-radius: 5px; 
+            padding: 10px;
+        """)
+        layout_current.addWidget(self.lbl_current_tool)
+        layout.addWidget(grp_current)
+
+        # === 区域 2: 夹具切换 (操作区 - 样式同步产品配置) ===
+        grp_switch = QGroupBox("夹具型号切换")
+        layout_switch = QHBoxLayout(grp_switch)
+
+        self.combo_tools = QComboBox()
+        self.combo_tools.setMinimumHeight(40)  # 加高
+        self.combo_tools.setStyleSheet("font-size: 12pt;")
+
+        btn_switch = QPushButton("确认切换")
+        btn_switch.setMinimumHeight(40)  # 加高
+        # 绿色按钮
+        btn_switch.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; font-size: 11pt;")
+        btn_switch.clicked.connect(self.switch_tool_model)
+
+        layout_switch.addWidget(self.combo_tools, 3)  # 下拉框占 3 份
+        layout_switch.addWidget(btn_switch, 1)  # 按钮占 1 份
+        layout.addWidget(grp_switch)
+
+        # === 区域 3: 详细配置管理 (左右分栏) ===
+        # 这里不需要 GroupBox 包裹，直接作为下半部分
+        bottom_layout = QHBoxLayout()
+
+        # --- 左侧：列表管理 ---
+        left_layout = QVBoxLayout()
+        left_layout.addWidget(QLabel("夹具型号列表"))
+
+        self.list_tools = QListWidget()
+        self.list_tools.currentRowChanged.connect(self.on_tool_selected)
+        left_layout.addWidget(self.list_tools)
+
+        # 增删按钮
+        btn_box = QHBoxLayout()
+        btn_add = QPushButton("新建夹具")
+        btn_del = QPushButton("删除选中")
+        btn_add.setStyleSheet("background-color: #2196F3; color: white;")
+        btn_del.setStyleSheet("background-color: #F44336; color: white;")
+
+        btn_add.clicked.connect(self.add_tool_model)
+        btn_del.clicked.connect(self.delete_tool_model)
+
+        btn_box.addWidget(btn_add)
+        btn_box.addWidget(btn_del)
+        left_layout.addLayout(btn_box)
+
+        # --- 右侧：参数编辑 ---
+        right_grp = QGroupBox("参数详情")
+        right_layout = QVBoxLayout(right_grp)
+
+        # 1. 基础信息
+        form_base = QFormLayout()
+        self.tool_name_edit = QLineEdit()
+        self.tool_name_edit.setReadOnly(True)  # 禁止直接改名，防止ID错乱
+        self.tool_name_edit.setPlaceholderText("在左侧列表选择...")
+        self.tool_desc_edit = QLineEdit()
+        form_base.addRow("型号名称:", self.tool_name_edit)
+        form_base.addRow("描述备注:", self.tool_desc_edit)
+        right_layout.addLayout(form_base)
+
+        # 2. 相机配置
+        grp_cam = QGroupBox("相机参数 (Camera)")
+        form_cam = QFormLayout(grp_cam)
+        self.cam_off_x = QLineEdit()
+        self.cam_off_y = QLineEdit()
+        self.cam_rot = QLineEdit()
+        form_cam.addRow("Offset X:", self.cam_off_x)
+        form_cam.addRow("Offset Y:", self.cam_off_y)
+        form_cam.addRow("Rotation:", self.cam_rot)
+        right_layout.addWidget(grp_cam)
+
+        # 3. 夹爪配置
+        grp_grip = QGroupBox("夹爪参数 (Main Gripper)")
+        form_grip = QFormLayout(grp_grip)
+        self.grip_off_x = QLineEdit()
+        self.grip_off_y = QLineEdit()
+        self.grip_z_diff = QLineEdit()
+        form_grip.addRow("Offset X:", self.grip_off_x)
+        form_grip.addRow("Offset Y:", self.grip_off_y)
+        form_grip.addRow("Z Diff:", self.grip_z_diff)
+        right_layout.addWidget(grp_grip)
+
+        # 保存按钮
+        btn_save_params = QPushButton("保存参数修改")
+        btn_save_params.setMinimumHeight(35)
+        btn_save_params.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        btn_save_params.clicked.connect(self.save_current_tool_params)
+        right_layout.addWidget(btn_save_params)
+        right_layout.addStretch()
+
+        # 组合左右布局 (左1 : 右2)
+        bottom_layout.addLayout(left_layout, 1)
+        bottom_layout.addWidget(right_grp, 2)
+
+        layout.addLayout(bottom_layout)
+
     # === 逻辑处理部分 ===
     def _set_row_elbow_combo(self, row, current_val="elbow_up"):
         """辅助函数：给指定行设置姿态下拉框"""
@@ -497,6 +620,27 @@ class ConfigEditorUI(QMainWindow):
             idx = self.combo_product.findText(current_model)
             if idx >= 0:
                 self.combo_product.setCurrentIndex(idx)
+
+            # === 加载工装夹具配置 ===
+            tools_cfg = self.config_data.get('tools', {})
+            current_tool = tools_cfg.get('current_model', "Unknown")
+            models = tools_cfg.get('models', [])
+
+            # 1. 更新顶部状态
+            self.lbl_current_tool.setText(current_tool)
+
+            # 2. 更新切换下拉框
+            self.combo_tools.clear()
+            self.list_tools.clear()
+
+            for m in models:
+                name = m.get('name', 'Unnamed')
+                self.combo_tools.addItem(name)
+                self.list_tools.addItem(name)
+
+            # 选中当前
+            idx = self.combo_tools.findText(current_tool)
+            if idx >= 0: self.combo_tools.setCurrentIndex(idx)
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载配置文件失败: {e}")
@@ -998,6 +1142,182 @@ class ConfigEditorUI(QMainWindow):
 
         QMessageBox.information(self, "成功", f"产品配置已保存\n当前型号: {current_model}")
 
+    def get_current_tool_model(self):
+        """获取当前激活的夹具完整配置 dict"""
+        tools = self.data.get("tools", {})
+        curr_name = tools.get("current_model")
+        models = tools.get("models", [])
+
+        for m in models:
+            if m["name"] == curr_name:
+                return m
+        return {}  # 或者返回默认
+
+    def on_tool_selected(self, row):
+        """点击列表，右侧显示详情"""
+        if row < 0:
+            # 清空输入框
+            self.tool_name_edit.clear()
+            self.tool_desc_edit.clear()
+            self.cam_off_x.clear();
+            self.cam_off_y.clear();
+            self.cam_rot.clear()
+            self.grip_off_x.clear();
+            self.grip_off_y.clear();
+            self.grip_z_diff.clear()
+            return
+
+        tool_name = self.list_tools.item(row).text()
+
+        # 从配置中查找对应的数据
+        tools_cfg = self.config_data.get('tools', {})
+        models = tools_cfg.get('models', [])
+
+        target_data = next((m for m in models if m['name'] == tool_name), None)
+
+        if target_data:
+            self.tool_name_edit.setText(target_data.get('name', ''))
+
+            grip_data = target_data.get('main_gripper', {})
+            self.tool_desc_edit.setText(grip_data.get('desc', ''))
+            self.grip_off_x.setText(str(grip_data.get('offset_x', 0)))
+            self.grip_off_y.setText(str(grip_data.get('offset_y', 0)))
+            self.grip_z_diff.setText(str(grip_data.get('z_diff', 0)))
+
+            cam_data = target_data.get('camera', {})
+            self.cam_off_x.setText(str(cam_data.get('offset_x', 0)))
+            self.cam_off_y.setText(str(cam_data.get('offset_y', 0)))
+            self.cam_rot.setText(str(cam_data.get('rotation', 0)))
+
+    # === 工装夹具相关槽函数 ===
+
+    def switch_tool_model(self):
+        """切换当前使用的夹具"""
+        selected_tool = self.combo_tools.currentText()
+        current_tool = self.lbl_current_tool.text()
+
+        if selected_tool == current_tool:
+            return
+
+        reply = QMessageBox.warning(
+            self, "切换确认",
+            f"确定要切换工装夹具为 [{selected_tool}] 吗？\n\n请确认物理硬件已更换完毕！",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            if 'tools' not in self.config_data:
+                self.config_data['tools'] = {}
+
+            self.config_data['tools']['current_model'] = selected_tool
+            self._write_to_file()
+
+            self.lbl_current_tool.setText(selected_tool)
+
+            if self.controller:
+                self.controller.reload_config()
+
+            QMessageBox.information(self, "成功", "工装配置已更新")
+
+    def add_tool_model(self):
+        """添加新夹具"""
+        text, ok = QInputDialog.getText(self, "新建夹具", "请输入夹具名称 (例如: 3号夹具):")
+        if ok and text:
+            text = text.strip()
+            if not text: return
+
+            # 查重
+            models = self.config_data.get('tools', {}).get('models', [])
+            if any(m['name'] == text for m in models):
+                QMessageBox.warning(self, "错误", "该夹具名称已存在")
+                return
+
+            # 创建默认结构
+            new_model = {
+                "name": text,
+                "camera": {"offset_x": 0.0, "offset_y": 0.0, "rotation": 0},
+                "main_gripper": {"desc": "默认夹爪", "offset_x": 0.0, "offset_y": 0.0, "z_diff": 0.0}
+            }
+
+            # 保存
+            if 'tools' not in self.config_data:
+                self.config_data['tools'] = {'models': [], 'current_model': ''}
+
+            self.config_data['tools']['models'].append(new_model)
+            self._write_to_file()
+
+            # 刷新列表并选中
+            self.load_config_from_file()  # 重新加载最简单，确保 Combo 和 List 同步
+
+            # 选中新加的项
+            items = self.list_tools.findItems(text, Qt.MatchExactly)
+            if items:
+                self.list_tools.setCurrentItem(items[0])
+
+    def delete_tool_model(self):
+        """删除夹具"""
+        row = self.list_tools.currentRow()
+        if row < 0: return
+
+        tool_name = self.list_tools.item(row).text()
+        current_tool = self.lbl_current_tool.text()
+
+        # 【关键】禁止删除当前正在使用的
+        if tool_name == current_tool:
+            QMessageBox.warning(self, "禁止删除", f"[{tool_name}] 正在使用中，无法删除！\n请先切换到其他夹具。")
+            return
+
+        reply = QMessageBox.question(self, "确认删除", f"确定要永久删除 [{tool_name}] 的配置吗？",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            models = self.config_data.get('tools', {}).get('models', [])
+            # 过滤掉要删除的
+            new_models = [m for m in models if m['name'] != tool_name]
+            self.config_data['tools']['models'] = new_models
+
+            self._write_to_file()
+            self.load_config_from_file()  # 刷新界面
+
+    def save_current_tool_params(self):
+        """保存右侧编辑的参数"""
+        reply = QMessageBox.question(self, "确认保存修改",
+                                     f"确定要修改参数吗?",
+                                     QMessageBox.Yes | QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+
+            row = self.list_tools.currentRow()
+            if row < 0: return
+
+            tool_name = self.list_tools.item(row).text()
+
+            try:
+                # 找到内存中的引用
+                models = self.config_data.get('tools', {}).get('models', [])
+                target_data = next((m for m in models if m['name'] == tool_name), None)
+
+                if target_data:
+                    # 更新数据
+                    target_data['main_gripper']['desc'] = self.tool_desc_edit.text()
+                    target_data['main_gripper']['offset_x'] = float(self.grip_off_x.text())
+                    target_data['main_gripper']['offset_y'] = float(self.grip_off_y.text())
+                    target_data['main_gripper']['z_diff'] = float(self.grip_z_diff.text())
+
+                    target_data['camera']['offset_x'] = float(self.cam_off_x.text())
+                    target_data['camera']['offset_y'] = float(self.cam_off_y.text())
+                    target_data['camera']['rotation'] = float(self.cam_rot.text())
+
+                    self._write_to_file()
+
+                    # 如果修改的是当前正在使用的夹具，需要通知后台重载
+                    if tool_name == self.lbl_current_tool.text():
+                        if self.controller:
+                            self.controller.reload_config()
+
+                    QMessageBox.information(self, "成功", "参数已保存")
+
+            except ValueError:
+                QMessageBox.warning(self, "错误", "请输入有效的数字参数")
 
 # === 测试入口 ===
 if __name__ == "__main__":

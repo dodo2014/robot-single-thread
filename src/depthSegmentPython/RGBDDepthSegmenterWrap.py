@@ -4,6 +4,7 @@ import json
 import os
 import random
 import re
+from pathlib import Path
 from src.utils.path_helper import get_vision_detector_dir
 
 # ===================== 常量定义 =====================
@@ -273,7 +274,6 @@ class RGBDDetector:
             self.unload_item_width = cfg.get("unload_item_width", 600)
             self.unload_item_height = cfg.get("unload_item_height", 60)
             self.unload_depth_threshold = cfg.get("unload_depth_threshold", 20)
-            self.unload_min_length = cfg.get("unload_min_length", 300)
 
             self.config_loaded = True
             self._init_yolov4_model()
@@ -774,12 +774,38 @@ class RGBDDetector:
         else:
             # 两条都是垂直线
             return abs(x_const1 - x_const2)
-
+    
+    def _sample_depth_near_line(self, depth_filtered, line_points, offset=10):
+        """在直线两侧采样深度，避开突变边缘"""
+        sampled_depths = []
+        h, w = depth_filtered.shape
+        
+        for (x, y) in line_points:
+            # 在直线两侧采样（根据扫描方向选择一侧）
+            if self.sort_rule == SortRule.SORT_BY_Y_DESC:  # 从下到上扫描
+                # 采样直线上方（Y更小）的区域
+                sample_y = int(y - offset)
+            else:  # 从上到下扫描
+                # 采样直线下方（Y更大）的区域
+                sample_y = int(y + offset)
+            
+            sample_x = int(x)
+            
+            # 边界检查
+            if 0 <= sample_y < h and 0 <= sample_x < w:
+                curr_depth = depth_filtered[sample_y, sample_x]
+                if (curr_depth != self.depth_invalid and 
+                    self.feed_depth_min <= curr_depth <= self.feed_depth_max):
+                    sampled_depths.append(curr_depth)
+        
+        if sampled_depths:
+            # 使用中值减少异常值影响
+            return int(np.median(sampled_depths))
+            
     # ==============================================================
     # ✅ ✅ ✅ 【直线检测算法完整版】_depth_segment_find_horizontal_line
-    # 适配多ROI：新增feed_roi参数，默认使用上料ROI
     # ==============================================================
-    def _depth_segment_find_horizontal_line(self, depth_img, use_feed_roi=True):
+    def _depth_segment_find_horizontal_line(self, depth_img):
         regions = []
         h, w = depth_img.shape
         
@@ -787,25 +813,12 @@ class RGBDDetector:
         depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
         depth_filtered = cv2.GaussianBlur(depth_filtered, (3,3), self.gaussian_sigma)
         
-        # 选择使用的ROI（上料ROI/其他ROI）
-        if use_feed_roi:
-            roi_x = self.feed_roi_x
-            roi_y = self.feed_roi_y
-            roi_w = self.feed_roi_w
-            roi_h = self.feed_roi_h
-            min_length = self.feed_min_length
-        else:
-            roi_x = self.unload_roi_x
-            roi_y = self.unload_roi_y
-            roi_w = self.unload_roi_w
-            roi_h = self.unload_roi_h
-            min_length = self.unload_min_length
-        
         # 限定ROI区域
-        roi_x_start = max(roi_x, 0)
-        roi_x_end = min(roi_x + roi_w, w)
-        roi_y_start = max(roi_y, 0)
-        roi_y_end = min(roi_y + roi_h, h)
+        roi_x_start = max(self.feed_roi_x, 0)
+        roi_x_end = min(self.feed_roi_x + self.feed_roi_w, w)
+        roi_y_start = max(self.feed_roi_y, 0)
+        roi_y_end = min(self.feed_roi_y + self.feed_roi_h, h)
+        min_length = self.feed_min_length
         
         # ✅ 提取ROI区域
         roi_depth = depth_filtered[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
@@ -943,6 +956,7 @@ class RGBDDetector:
             line_points = self._bresenham_line(x1, y1, x2, y2)
             
             # 收集直线及其附近的有效像素点
+            depths = []
             for (x, y) in line_points:
                 # 检查是否在ROI和图像范围内
                 if (roi_x_start <= x < roi_x_end and 
@@ -952,8 +966,8 @@ class RGBDDetector:
                     # 深度有效性检查
                     if (curr_depth != self.depth_invalid and 
                         self.feed_depth_min <= curr_depth <= self.feed_depth_max):
-                        
                         target_pixels.append((x, y))
+                        depths.append(curr_depth)
                         target_depth_sum += curr_depth
                         valid_pixel_count += 1
             
@@ -961,7 +975,9 @@ class RGBDDetector:
             if valid_pixel_count > roi_w * 0.2: # 100:  # 最小像素数
                 area = valid_pixel_count
                 avg_depth = int(target_depth_sum / area) if area > 0 else self.feed_depth_min
-                
+                avg_depth = np.median(depths)
+                avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset=5)
+
                 # 计算像素中心点
                 cx = int(np.mean([p[0] for p in target_pixels]))
                 cy = int(np.mean([p[1] for p in target_pixels]))
@@ -971,7 +987,9 @@ class RGBDDetector:
                 pts = np.array(target_pixels, dtype=np.int32).reshape((-1,1,2))
                 rotated_rect = cv2.minAreaRect(pts)
                 rotate_angle = round(rotated_rect[2], 2)
-                
+                if rotate_angle > 45:
+                    rotate_angle -= 90
+
                 # 计算世界坐标
                 world_xyz = self._pixel2world(edge_center_point, avg_depth)
                 
@@ -1072,8 +1090,9 @@ class RGBDDetector:
         return exists_flag, coords
 
     # ===================== 【修改后✅核心】下料算法：每层X1个，沿Y竖直并排 =====================
+    # ===================== 【简化优化✅核心】下料算法：单层深度比较判断 =====================
     def _unload_check(self, depth_img):
-        """下料算法：识别可放置长条形产品的区域坐标"""
+        """下料算法：基于单层深度比较判断产品放置状态"""
         exists_flag = DetectStatus.NOTHING
         coords = [0.0, 0.0, 0.0, 0.0]
         
@@ -1088,70 +1107,197 @@ class RGBDDetector:
         roi_y_start = max(self.unload_roi_y, 0)
         roi_y_end = min(self.unload_roi_y + self.unload_roi_h, h)
         
-        # 3. 生成每层的理论坐标
-        layer_coords = []
-        # 计算每层的基准深度（从底层开始）
-        base_depth = self.feed_depth_min  # 底层基准深度
-        for layer_idx in range(self.unload_layer_count):
-            # 每层的深度偏移
-            layer_depth = base_depth + layer_idx * self.unload_layer_height
-            
-            # 计算每层第一个产品的X坐标（居中排列）
-            # total_width = self.unload_item_count_per_layer * self.unload_item_width + \
-            #               (self.unload_item_count_per_layer - 1) * self.unload_item_interval
-            # start_x = roi_x_start + (roi_x_end - roi_x_start - total_width) // 2
-            # start_y = roi_y_start + (roi_y_end - roi_y_start) // 2  # 层Y坐标居中
-            start_x = roi_x_start
-            start_y = roi_y_start
-
-            # 生成该层所有产品的坐标
-            for item_idx in range(self.unload_item_count_per_layer):
-                # item_x = start_x + item_idx * (self.unload_item_width + self.unload_item_interval) + self.unload_item_width // 2
-                # item_y = start_y
-                item_x = start_x + self.unload_item_width // 2
-                item_y = start_y + item_idx * (self.unload_item_height + self.unload_item_interval)
-                
-                layer_coords.append({
-                    "layer_idx": layer_idx,
-                    "item_idx": item_idx,
-                    "pixel_x": item_x,
-                    "pixel_y": item_y,
-                    "target_depth": layer_depth,
-                    "is_empty": False
-                })
+        # 3. 生成单层理论产品区域坐标（所有层坐标都一样）
+        item_regions = []
+        region_depths = []  # 存储每个区域的平均深度
         
-        # 4. 检测每个位置是否为空（深度差超过阈值则视为空）
-        empty_positions = []
-        for pos in layer_coords:
-            px = int(pos["pixel_x"])
-            py = int(pos["pixel_y"])
-            
-            # 检查像素坐标是否在有效范围内
-            if roi_x_start <= px < roi_x_end and roi_y_start <= py < roi_y_end:
-                curr_depth = depth_filtered[py, px]
-                
-                # 判断是否为空：无效深度 或 深度差超过阈值
-                if (curr_depth == self.depth_invalid) or \
-                   (abs(curr_depth - pos["target_depth"]) > self.unload_depth_threshold):
-                    pos["is_empty"] = True
-                    empty_positions.append(pos)
+        # 层号固定为0（只考虑一层）
+        layer_idx = 0
+        layer_depth = self.feed_depth_min  # 第一层基准深度
         
-        # 5. 找到第一个空余位置（优先低层，同层优先左侧）
-        if empty_positions:
-            # 按层号升序、同层按物品索引升序排序
-            empty_positions.sort(key=lambda p: (p["layer_idx"], p["item_idx"]))
-            first_empty = empty_positions[0]
+        # 生成该层所有产品的区域
+        for item_idx in range(self.unload_item_count_per_layer):
+            # 计算产品区域坐标
+            left = roi_x_start
+            top = roi_y_start + item_idx * (self.unload_item_height + self.unload_item_interval)
+            right = left + self.unload_item_width
+            bottom = top + self.unload_item_height
             
+            # 确保在ROI范围内
+            left = max(left, roi_x_start)
+            top = max(top, roi_y_start)
+            right = min(right, roi_x_end)
+            bottom = min(bottom, roi_y_end)
+            
+            if right <= left or bottom <= top:
+                continue  # 无效区域
+                
+            # 提取产品区域的深度值
+            region_depth = depth_filtered[top:bottom, left:right]
+            
+            # 过滤无效深度值
+            valid_mask = (region_depth != self.depth_invalid) & \
+                        (region_depth >= self.feed_depth_min) & \
+                        (region_depth <= self.feed_depth_max)
+            valid_depths = region_depth[valid_mask]
+            
+            # 计算平均深度
+            if len(valid_depths) > 0:
+                mean_depth = np.mean(valid_depths)
+                valid_ratio = len(valid_depths) / region_depth.size
+            else:
+                mean_depth = layer_depth  # 默认值
+                valid_ratio = 0
+            
+            # 存储区域信息
+            region_info = {
+                "layer_idx": layer_idx,
+                "item_idx": item_idx,
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+                "center_x": (left + right) // 2,
+                "center_y": (top + bottom) // 2,
+                "target_depth": layer_depth,
+                "mean_depth": mean_depth,
+                "valid_ratio": valid_ratio,
+                "is_valid": valid_ratio > 0.3  # 有效像素比例阈值
+            }
+            
+            item_regions.append(region_info)
+            if region_info["is_valid"]:
+                region_depths.append(mean_depth)
+        
+        # 4. 判断放置状态
+        empty_regions = []
+        
+        if len(region_depths) > 0:
+            # 计算所有有效区域的平均深度和标准差
+            all_mean_depth = np.mean(region_depths)
+            all_std_depth = np.std(region_depths) if len(region_depths) > 1 else 0
+            
+            print(f"深度统计: 平均值={all_mean_depth:.1f}, 标准差={all_std_depth:.1f}")
+            
+            # 判断规则：
+            # 1. 如果所有区域深度标准差很小（< 阈值），说明深度一致
+            # 2. 如果某个区域深度明显大于平均深度，说明该区域为空
+            
+            depth_std_threshold = self.unload_depth_threshold # 15  # 深度标准差阈值
+            
+            if all_std_depth < depth_std_threshold:
+                # 情况1: 所有区域深度差不多
+                print("状态: 所有区域深度一致")
+                
+                # 判断是全部空还是全部有产品
+                if True: #all_mean_depth > layer_depth + 30:  # 深度明显大于基准，说明全部空
+                    print("结论: 全部区域为空")
+                    # 所有区域都为空，根据排序规则选择第一个
+                    empty_regions = [r for r in item_regions if r["is_valid"]]
+                '''
+                else:
+                    print("结论: 全部区域已放置产品")
+                    # 如果全部已放置，根据排序规则返回最上面或最下面的边缘
+                    if self.sort_rule == SortRule.SORT_BY_Y_ASC:
+                        # 从上到下：选择最上面的区域
+                        item_regions.sort(key=lambda r: r["top"])
+                        target_region = item_regions[0]
+                        # 使用顶部边缘中心
+                        edge_x = target_region["center_x"]
+                        edge_y = target_region["top"]
+                        edge_center = (edge_x, edge_y)
+                    elif self.sort_rule == SortRule.SORT_BY_Y_DESC:
+                        # 从下到上：选择最下面的区域
+                        item_regions.sort(key=lambda r: r["bottom"], reverse=True)
+                        target_region = item_regions[0]
+                        # 使用底部边缘中心
+                        edge_x = target_region["center_x"]
+                        edge_y = target_region["bottom"]
+                        edge_center = (edge_x, edge_y)
+                    else:
+                        # 默认使用第一个区域的中心
+                        target_region = item_regions[0]
+                        edge_center = (target_region["center_x"], target_region["center_y"])
+                    
+                    # 计算世界坐标
+                    world_xyz = self._pixel2world(edge_center, target_region["mean_depth"])
+                    x, y, z = world_xyz
+                    r = 0.0
+                    
+                    # 叠加工具坐标偏移
+                    x += self.tool_coord_x
+                    y += self.tool_coord_y
+                    z += self.tool_coord_z
+                    r += self.tool_coord_r
+                    
+                    coords = [x, y, z, r]
+                    exists_flag = DetectStatus.EXIST
+                    
+                    print(f"返回坐标: 区域{target_region['item_idx']}, 边缘({edge_x}, {edge_y})")
+                    return exists_flag, coords
+                '''
+            else:
+                # 情况2: 深度有差异，找出空区域
+                print("状态: 区域深度有差异")
+                
+                # 空区域判断：深度比平均深度大一定阈值
+                depth_diff_threshold = depth_std_threshold # 25  # 深度差异阈值
+                
+                for region in item_regions:
+                    if not region["is_valid"]:
+                        # 无效区域视为空
+                        empty_regions.append(region)
+                        continue
+                        
+                    depth_diff = region["mean_depth"] - all_mean_depth
+                    if depth_diff > depth_diff_threshold:
+                        # 深度明显大于平均，说明该区域为空
+                        empty_regions.append(region)
+                        print(f"  区域{region['item_idx']}: 深度={region['mean_depth']:.1f}, "
+                            f"差异={depth_diff:.1f} > 阈值, 判断为空")
+        
+        else:
+            # 没有有效深度数据，所有区域都视为空
+            print("状态: 无有效深度数据，所有区域视为空")
+            empty_regions = item_regions
+        
+        # 5. 如果有空区域，根据排序规则选择第一个空位置
+        if empty_regions:
             exists_flag = DetectStatus.EXIST
             
-            # 计算该位置的世界坐标
-            pixel_x = first_empty["pixel_x"]
-            pixel_y = first_empty["pixel_y"]
-            target_depth = first_empty["target_depth"]
+            # 根据排序规则对空区域排序
+            if self.sort_rule == SortRule.SORT_BY_Y_ASC:
+                # 从上到下：选择Y坐标最小的空位置（最上面）
+                empty_regions.sort(key=lambda r: r["top"])
+                target_region = empty_regions[0]
+                # 使用顶部边缘中心
+                edge_x = target_region["center_x"]
+                edge_y = target_region["top"]
+                edge_center = (edge_x, edge_y)
+            elif self.sort_rule == SortRule.SORT_BY_Y_DESC:
+                # 从下到上：选择Y坐标最大的空位置（最下面）
+                empty_regions.sort(key=lambda r: r["bottom"], reverse=True)
+                target_region = empty_regions[0]
+                # 使用底部边缘中心
+                edge_x = target_region["center_x"]
+                edge_y = target_region["bottom"]
+                edge_center = (edge_x, edge_y)
+            else:
+                # 默认按物品索引排序
+                empty_regions.sort(key=lambda r: r["item_idx"])
+                target_region = empty_regions[0]
+                edge_center = (target_region["center_x"], target_region["center_y"])
             
-            world_xyz = self._pixel2world((pixel_x, pixel_y), target_depth)
+            print(f"选择空区域: 区域{target_region['item_idx']}, "
+                f"深度={target_region['mean_depth']:.1f}, "
+                f"边缘({edge_x}, {edge_y})")
+            
+            # 计算世界坐标
+            # 空位置使用目标深度，而不是实际深度
+            target_depth = target_region["target_depth"]
+            world_xyz = self._pixel2world(edge_center, target_depth)
             x, y, z = world_xyz
-            r = 0.0  # 旋转角度默认0
+            r = 0.0
             
             # 叠加工具坐标偏移
             x += self.tool_coord_x
@@ -1160,6 +1306,10 @@ class RGBDDetector:
             r += self.tool_coord_r
             
             coords = [x, y, z, r]
+        
+        else:
+            exists_flag = DetectStatus.NOTHING
+            print("状态: 未找到空区域")
         
         return exists_flag, coords
 
@@ -1183,7 +1333,7 @@ class RGBDDetector:
             elif ptype == PType.IRON_CHIP_CHECK: # 铁屑
                 exists_flag, coords = self._judge_detect_result(regions, ptype, rgb_img)
             elif ptype == PType.FEED_CHECK: # 上料
-                regions = self._depth_segment_find_horizontal_line(depth_img, use_feed_roi=True)
+                regions = self._depth_segment_find_horizontal_line(depth_img)
                 if not regions:
                     exists_flag = DetectStatus.NOTHING
                 else:
@@ -1404,7 +1554,7 @@ class RGBDDetector:
                                  (item_x + self.unload_item_width, item_y + self.unload_item_height),
                                  (255,255,0), 1)
                     # 标注层号和物品索引
-                    cv2.putText(draw_img, f"L{layer_idx}I{item_idx}", (item_x-20, item_y-15), 
+                    cv2.putText(draw_img, f"L{layer_idx} I{item_idx}", (item_x-20, item_y-15), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
             
             # 绘制第一个空余位置（红色高亮）
@@ -1454,34 +1604,60 @@ if __name__ == "__main__":
         exit(-1)
     print("初始化成功！")
 
-    rgb_img = cv2.imread("./rgb_image.png")          
-    depth_img = cv2.imread("./depth_image.png", cv2.IMREAD_UNCHANGED)
-
-    if rgb_img is None or depth_img is None:
-        print("读取图像失败，请检查路径！")
-        exit(-1)
-        
-    if depth_img.dtype == np.uint8:
-        depth_img = depth_img.astype(np.uint16) * 20
-    elif depth_img.dtype == np.uint16:
-        depth_img8u = depth_img.astype(np.uint8)
-        cv2.imwrite("./depth_8u.png", depth_img8u)
-
-    # 切换排序规则 → 联动扫描方向
-    # detector.sort_rule = SortRule.SORT_BY_Y_DESC    # Y降序 → 从底部向上找水平直线
-    # detector.sort_rule = SortRule.SORT_BY_Y_ASC   # Y升序 → 从顶部向下找水平直线
+    depth_filename = "./depth_image.png"
+    depth_filename = "./depth_image1.png"
+    depth_filename = "./depth_1768713398274.png"
+    depth_filename = "./depth_1768813732047.png"
+    depth_filename = "20260123/depth_1769134430866.png"
     
-    # ptype = PType.MATERIAL_CHECK
-    ptype = PType.FEED_CHECK
-    # ptype = PType.UNLOAD_CHECK
-    detect_res = detector.detect(ptype, rgb_img, depth_img)
-    print("检测结果:\n", json.dumps(detect_res, ensure_ascii=False, indent=2))
+    rgb_img = cv2.imread("./rgb_image.png")
+    rgb_img = cv2.imread("20260123/rgb_1769134430866.jpg")
 
-    depth_color = detector.depth_pseudo_color(depth_img)
+    # 获取所有PNG文件
+    image_folder = "20260123"
+    image_files = list(Path(image_folder).glob("*.png"))
+    if not image_files:
+        print(f"在文件夹 {image_folder} 中没有找到PNG文件")
+        exit(-1)
+    print(f"找到 {len(image_files)} 个PNG文件")
+    
+    # 创建输出文件夹
+    output_folder = "result"
+    os.makedirs(output_folder, exist_ok=True)
 
-    result_img = detector.draw_result_with_rotated_box(depth_color, detect_res)
-    cv2.imshow("result-line", result_img)
-    cv2.imwrite("./detect_result_horizontal_line.jpg", result_img)
+    for i, image_file in enumerate(image_files):
+        print(f"\n处理文件 {i+1}/{len(image_files)}: {image_file.name}")
+        depth_filename = str(image_file)
+        depth_img = cv2.imread(depth_filename, cv2.IMREAD_UNCHANGED)
 
-    cv2.waitKey(0)
+        if rgb_img is None or depth_img is None:
+            print("读取图像失败，请检查路径！")
+            exit(-1)
+            
+        if depth_img.dtype == np.uint8:
+            depth_img = depth_img.astype(np.uint16) * 20
+        # elif depth_img.dtype == np.uint16:
+        #     depth_img8u = (depth_img / 20).astype(np.uint8)
+        #     cv2.imwrite("./depth_8u.png", depth_img8u)
+
+        # 切换排序规则 → 联动扫描方向
+        # detector.sort_rule = SortRule.SORT_BY_Y_DESC    # Y降序 → 从底部向上找水平直线
+        # detector.sort_rule = SortRule.SORT_BY_Y_ASC   # Y升序 → 从顶部向下找水平直线
+        
+        # ptype = PType.MATERIAL_CHECK
+        ptype = PType.FEED_CHECK
+        ptype = PType.UNLOAD_CHECK
+        detect_res = detector.detect(ptype, rgb_img, depth_img)
+        print("检测结果:\n", json.dumps(detect_res, ensure_ascii=False, indent=2))
+
+        depth_color = detector.depth_pseudo_color(depth_img)
+
+        result_img = detector.draw_result_with_rotated_box(depth_color, detect_res)
+        cv2.imshow("result-line", result_img)
+        # file_name = depth_filename.rsplit('.', 1)[0] + "_result.jpg"
+        file_name = os.path.join(output_folder, f"{image_file.stem}_result.jpg")
+        # cv2.imwrite(file_name, result_img)
+
+        cv2.waitKey(0)
+
     cv2.destroyAllWindows()

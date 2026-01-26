@@ -55,17 +55,16 @@
 	"yolo_input_h": 608,
 	
 	// 下料配置
-	"unload_roi_x": 250,
+	"unload_roi_x": 350,
 	"unload_roi_y": 50,
-	"unload_roi_w": 800,
-	"unload_roi_h": 500,
+	"unload_roi_w": 700,
+	"unload_roi_h": 600,
 	"unload_layer_count": 6,
 	"unload_layer_height": 100,
 	"unload_item_count_per_layer": 8,
 	"unload_item_interval": 10,
 	"unload_item_width": 600,
 	"unload_item_height": 60,
-	"unload_depth_threshold": 20,
-	"unload_min_length": 500
+	"unload_depth_threshold": 20
 }
 

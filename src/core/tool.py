@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 import math
+import traceback
+
+from src.utils import logger
 from src.core.kinematics import ScaraKinematics
 
 """相机坐标转换为夹爪的基座标"""
@@ -18,9 +21,14 @@ def compute_gripper_target(
 
         # --- 结构参数 ---
         robot_params,  # {l1, l2, ...}
-        cam_rotation=0  # 相机安装旋转角 (0: 图像上=机器后, 90: 图像上=机器右...)
+        cam_rotation=0,  # 相机安装旋转角 (0: 图像上=机器后, 90: 图像上=机器右...)
+        gripper_install_angle=0 # 如果夹爪本身装歪了，也可以传这个
 ):
     try:
+        logger.info(f"camera data: {camera_data}")
+        logger.info(f"robot state: {robot_state}")
+        logger.info(f"elbow config: {elbow_config}")
+        logger.info(f"robot joints: {robot_joints}")
         # 1. 解包
         xc, yc, zc, rc = camera_data
         curr_x, curr_y, curr_z, curr_r = robot_state
@@ -90,7 +98,6 @@ def compute_gripper_target(
             config_type=elbow_config
         )
 
-        print(f"ik_res: {ik_res}")
         if not ik_res:
             return None
 
@@ -104,10 +111,32 @@ def compute_gripper_target(
         while target_motor_r > 180: target_motor_r -= 360
         while target_motor_r <= -180: target_motor_r += 360
 
+        logger.info(f"target coord: {target_motor_x, target_motor_y, target_motor_z, target_motor_r}")
         return [target_motor_x, target_motor_y, target_motor_z, target_motor_r]
     except Exception as ex:
-        print(ex)
+        logger.error(f"{ex} \n{traceback.format_exc()}")
         return None
+
+
+def move_forward(l1, l2, z0, nn3, xe, ye, ze, te, config_curr, j1_curr, j2_curr, distance):
+    target_x, target_y, target_z, target_r = ScaraKinematics().calculate_forward_move(l1, l2, z0,
+                                                                                      nn3, xe, ye, ze, te,
+                                                                                      j1_curr, j2_curr,
+                                                                                      distance,
+                                                                                      config_curr=config_curr)
+    foward_point = {
+        "name": "FP_P0",
+        "coords": [
+            target_x,
+            target_y,
+            target_z,
+            target_r
+        ],
+        "photo": 0,
+        "config": config_curr
+    }
+    # print(f"foward point: {foward_point}")
+    return foward_point
 
 
 def main():
@@ -133,11 +162,16 @@ def main():
     # robot_state: [x, y, z, r] (PLC反馈)
     # robot_joints: [j1, j2, j3, j4] (PLC反馈)
 
-    vision_data = [ 9.17, 31.59, 749, -3.8700000000000045]
-    robot_state = [1324.2601, 7.8166, 20.0, -29.4765]
-    elbow_config = 'elbow_up'
-    robot_joints = [-14.82, 32.76, 20.00, 29.48]
+    # vision_data = [9.17, 31.59, 749, -3.8700000000000045]
+    # robot_state = [1324.2601, 7.8166, 20.0, -29.4765]
+    # elbow_config = 'elbow_up'
+    # robot_joints = [-14.82, 32.76, 20.00, 29.48]
 
+
+    vision_data = [6.7, -98.98, 547, -7.980000000000004]
+    robot_state = [144.1203, 989.7299, 120.0, -52.12]
+    elbow_config = 'elbow_up'
+    robot_joints = [41.980735778808594, 87.38981628417969, 120.0, -52.119991302490234]
 
 
     # 4. 调用计算
@@ -152,8 +186,30 @@ def main():
         robot_params=robot_params,
         cam_rotation=cam_cfg.get("rotation", 0)
     )
-    print(target_coords)
+    print(f"target coords: {target_coords}")
 
+    xe, ye, ze, te = target_coords
+
+    ik_res = ScaraKinematics.inverse_kinematics_v2(
+        xe, ye, ze, 0,
+        robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
+        config_type=elbow_config  # 【关键】强制保持当前姿态
+    )
+
+
+    j1_new = ik_res['the1']
+    j2_new = ik_res['the2']
+
+    back_coords = move_forward(
+        robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
+        xe, ye, ze, te, elbow_config, j1_new, j2_new, -50)
+
+    forward_coords = move_forward(
+        robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
+        xe, ye, ze, te, elbow_config, j1_new, j2_new, 50)
+
+    print(f"back coords: {back_coords}")
+    print(f"forward coords: {forward_coords}")
 
 if __name__ == '__main__':
     main()
