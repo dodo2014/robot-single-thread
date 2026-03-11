@@ -12,6 +12,7 @@ import time
 import json
 import os
 import traceback
+import copy
 
 
 class Controller(QThread):
@@ -96,6 +97,7 @@ class Controller(QThread):
                 self.loop_once()
                 # 轮询间隔
                 # time.sleep(2)
+                self.loop_count += 1
                 self.msleep(500)  # QThread 推荐用 msleep (毫秒)
             except KeyboardInterrupt:
                 logger.info("用户停止程序")
@@ -346,14 +348,15 @@ class Controller(QThread):
 
             if loop == 1:
                 if self.loop_count % 50 == 0:
-                    logger.info("res: {}".format(regs))
+                    # logger.info("res: {}".format(regs))
                     logger.info(
-                        f"PLC反馈关节信息: J1={curr_j1:.2f}, J2={curr_j2:.2f}, J3={curr_j3:.2f}, J4={curr_j4:.2f}")
+                        f"PLC反馈关节信息: [{curr_j1:.2f}, {curr_j2:.2f}, {curr_j3:.2f}, {curr_j4:.2f}]")
                     logger.info(f"正运动计算结果: {fk_res}")
             else:
-                logger.info("res: {}".format(regs))
+                # logger.info("res: {}".format(regs))
                 logger.info(
-                    f"PLC反馈关节信息: J1={curr_j1:.2f}, J2={curr_j2:.2f}, J3={curr_j3:.2f}, J4={curr_j4:.2f}")
+                    # f"PLC反馈关节信息: J1={curr_j1:.2f}, J2={curr_j2:.2f}, J3={curr_j3:.2f}, J4={curr_j4:.2f}")
+                    f"PLC反馈关节信息: [{curr_j1:.2f}, {curr_j2:.2f}, {curr_j3:.2f}, {curr_j4:.2f}]")
                 logger.info(f"正运动计算结果: {fk_res}")
 
             if fk_res:
@@ -561,7 +564,7 @@ class Controller(QThread):
         )
 
         if not ik_res:
-            logger.error("相机参数准备失败：逆解无解")
+            logger.error("相机参数准备失败：逆解失败")
             return None
 
         j1 = ik_res['the1']
@@ -711,9 +714,9 @@ class Controller(QThread):
     def take_photo_check(self):
         return "OK"
 
-    def take_photo_position(self, camera_coords, config, loading=None, ptype=const.photo_type_normal):
+    def take_photo_position(self, point_coords, config, loading=None, ptype=const.photo_type_normal):
         """
-        :param camera_coords:传给相机的拍照位置坐标
+        :param point_coords:传给相机的拍照位置坐标
         :param config, 肘关节的状态，elbow_up/elbow_down
         :param loading, 上下料参数，1/上料，2/下料
         :param ptype, 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
@@ -736,13 +739,14 @@ class Controller(QThread):
                 logger.error("视觉服务未就绪")
                 return {"res": "ng", "coords": [], "trigger": ""}
 
-            logger.info(f"photo position coords >>>>>>>> : {camera_coords}, loading : {loading}, ptype : {ptype}")
+            logger.info(f"photo position coords >>>>>>>> : {point_coords}, loading : {loading}, ptype : {ptype}")
 
             # camera_prepare_coords = self.prepare_params_for_camera({"coords": camera_coords, "config": config})
             # logger.info(f"camera_prepare_coords >>>>>> : {camera_prepare_coords}")
             # pos = VisionSystem().run(camera_prepare_coords, loading=loading) # 相机只要x,y,z，不要r参数
 
-            algo_response = self.vision_service.execute_detection(ptype)
+            # algo_response = self.vision_service.execute_detection(ptype)
+            algo_response = self.vision_service.execute_detection_midian_depth(ptype)
             logger.info(f"algo_response >>>>>>>> : {algo_response}")
 
             if algo_response["code"] == 0:
@@ -945,7 +949,14 @@ class Controller(QThread):
         self.last_motion_end_point = target_point
         return True
 
-    def transform_tool_coord(self, coord):
+    def transform_tool_coord(self, coord, cheat_cemera=0, cheat_z_diff=0):
+        """
+        工具坐标转换
+        :param coord: 相机坐标系的坐标
+        :param cheat_cemera:
+            欺骗参数，如果cheat_cemera=1， 让【相机】成为末端工具去对齐物料， 把 gripper_offset 设置为 camera_offset，
+            同时使用 cheat_z_diff 代替z_diff
+        """
         try:
             robot_params = self.robot_params
 
@@ -960,16 +971,25 @@ class Controller(QThread):
             # 【关键】这里的 Offset 是 两个夹爪的连线中点 相对于 电机中心 的偏移
             gripper_offset = [grip_cfg.get("offset_x", 0), grip_cfg.get("offset_y", 0)]
             z_diff = grip_cfg.get("z_diff", 0)
+            gripper_install_angle = grip_cfg.get("gripper_install_angle", 0)
+            angle_offset = grip_cfg.get("angle_offset", 0)
 
+            # 获取当前位置数据
             real_time_point = self.get_realtime_point()
+            logger.info(f"real_time_point:{real_time_point}")
 
             vision_data = coord
             robot_state = self.last_axis_status
             robot_joints = self.last_joint_status
-            elbow_config = real_time_point.get("elbow_config", "elbow_up")
+            elbow_config = real_time_point.get("config", "elbow_up")
+
+            if cheat_cemera:
+                logger.info("cheat camera...")
+                gripper_offset=camera_offset
+                z_diff = cheat_z_diff
 
             # 4. 调用计算
-            target_coords = compute_gripper_target(
+            target_coord = compute_gripper_target(
                 camera_data=vision_data,
                 robot_state=robot_state,
                 elbow_config=elbow_config,
@@ -978,9 +998,12 @@ class Controller(QThread):
                 gripper_offset=gripper_offset,  # 传入中点偏移
                 z_diff=z_diff,
                 robot_params=robot_params,
-                cam_rotation=cam_cfg.get("rotation", 0)
+                cam_rotation=cam_cfg.get("rotation", 0),
+                gripper_install_angle=gripper_install_angle,
+                angle_offset=angle_offset
             )
-            return target_coords
+
+            return target_coord
         except Exception as e:
             logger.error(f"工具坐标转换错误 {e}\n{traceback.format_exc()}")
 
@@ -1092,17 +1115,18 @@ class Controller(QThread):
         loop_count = 0
         max_loops = 5
 
-        # 初始化 camera_coords
-        camera_coords = point.get("coords", [])
+        point_coords = point.get("coords", [])
         config = point.get("config", "elbow_up")
         loading = loading
 
         while self.running and loop_count < max_loops:
             loop_count += 1
-            logger.info(f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {camera_coords}, 当前loading动作: {loading}")
+            realtime_pt = self.get_realtime_point()
+            realtime_pt_coords = realtime_pt.get("coords", [])
+            logger.info(f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {realtime_pt_coords}, 当前loading动作: {loading}")
 
             # 1. 调用相机接口
-            result = self.take_photo_position(camera_coords, config, loading=loading, ptype=photo_type)
+            result = self.take_photo_position(point_coords, config, loading=loading, ptype=photo_type)
             logger.info(f"photo result is >>>>>>>>: {result}")
 
             # 2. 解析结果
@@ -1116,6 +1140,51 @@ class Controller(QThread):
 
             logger.info(f"视觉执行成功, 返回原始坐标 {coords}")
 
+            ##########################################
+            # 让 相机中心 对准物料，且高度保持在设定值
+            ##########################################
+
+            target_relative = coords[0]
+            current_dist = target_relative[2]
+            logger.info(f"当前相机距离物料高度: {current_dist:.1f} mm (阈值: {const.PRECISE_PHOTO_DISTANCE})")
+
+            # # 判断是否需要逼近拍照
+            # if current_dist > const.PRECISE_PHOTO_DISTANCE + 20.0:  # 加10mm容差防止反复跳
+            #     logger.info(f"距离过远，执行相机中心逼近...")
+            #     # 计算一个目标点：让相机对准物料，且高度为 400
+            #
+            #     # Z轴补偿计算
+            #     # 目标：让相机距离物体 400mm
+            #     # 公式：Target_Z = Curr_Z - (zc - 400)
+            #     # 这等同于在 compute_gripper_target 中传入 z_diff = 400
+            #     z_target_diff = const.PRECISE_PHOTO_DISTANCE
+            #     approach_coord = self.transform_tool_coord(target_relative, cheat_cemera=1, cheat_z_diff=z_target_diff)
+            #     if not approach_coord:
+            #         logger.error("逼近点逆解失败")
+            #         return False
+            #
+            #     # 构建坐标
+            #     approach_pt = {
+            #         "name": f"Vision_Approach_{loop_count}",
+            #         "coords": approach_coord,
+            #         "photo": 0,   # 移动到位后，通过循环再次触发拍照，不要在这里设1
+            #         "config": config
+            #     }
+            #     logger.info(f"逼近坐标: {approach_pt}")
+            #     # 为了安全，可以限制一下最小Z值 (防止视觉算出负数撞地)
+            #     if approach_pt["coords"][2] < -440.0:
+            #         logger.warning(f"逼近高度过低 ({approach_pt['coords'][2]}), 强制限位")
+            #         approach_pt["coords"][2] = -440.0
+            #
+            #     # 移动到新位置
+            #     if not self._move_segment_to_target(process_addr, target_point=approach_pt):
+            #         return False
+            #
+            #     # 移动完成后，进入下一次循环，重新拍照
+            #     # time.sleep(0.1)
+            #     continue
+
+            # === 距离合适 (<= 400)，计算最终抓取坐标并保存 ===
             transform_coords = []
 
             for coord in coords:
@@ -1901,22 +1970,68 @@ class Controller(QThread):
             }
             target_points_list.append(pt)
 
-        # 起始点回退
-        point_back = self.move_forward(process_start_point, distance=-100)
+        # 目标点
+        target_point = target_points_list[-1]
 
-        # 计算起始点-目标点的高度差
-        point_back_coord = point_back["coords"]
-        target_point_coord = target_points_list[-1]["coords"]
-        h_delta = target_point_coord[2] - point_back_coord[2]
+        # 构造wp1，目标正上方的点wp1，x,y,r和目标点相同，z和realtime相同
+        wp1 = copy.deepcopy(target_point)
+        wp1["coords"][2] = process_start_point["coords"][2]
 
-        # 移动到目标点相同高度
-        point_down = self.move_up_down(point_back_coord, h_delta)
+        # wp1向前移动50，构造wp2
+        wp2 = self.move_forward(wp1, 45)
 
-        # 移动到目标点之后，添加进刀量
-        point_forward = self.move_forward(target_points_list[-1], distance=100)
+        # wp2下降到目标点的z, 构造wp3
+        h_delta = target_point["coords"][2] - wp2["coords"][2] + 40
+        logger.info(f"h_delta is : {h_delta}")
+        wp3 = self.move_up_down(wp2, h_delta)
 
-        points = [process_start_point] + [point_back] + [point_down] + target_points_list + [point_forward]
-        logger.info(f"point list: {points}")
+        # wp3下降40，构造wp4
+        wp4 = self.move_up_down(wp3, -70)
+
+        # 上方50，测试用
+        way_point_up = self.move_up_down(target_point, 80)
+
+        way_point_forward = self.move_forward(way_point_up, 45)
+
+        way_point_down = self.move_up_down(way_point_forward, -100)
+
+        # points = [process_start_point, way_point_up, way_point_forward, way_point_down]
+        points = [process_start_point, wp1, wp2, wp3]
+
+        """
+        # 1、从实时点移动到目标点后面50mm处
+        # 先获取目标点后面50mm的点
+        # 再构造和实时点相同高度的点waypoint1
+
+        target_point_back = self.move_forward(target_point, -50)
+        start_point_height = process_start_point["coords"][2]
+
+        waypoint1 = target_point_back
+        waypoint1["coords"][2] = start_point_height
+
+        # 2、waypoint1直接下降到目标点相同高度
+        # 计算目标点和waypoint1的高度差
+        # 构造waypoint2
+
+        h_delta = target_point["coords"][2] - waypoint1["coords"][2]
+        waypoint2 = self.move_up_down(waypoint1, h_delta)
+
+        # 3、waypoint2下降30mm, 因为目标坐标没有算物料厚度，要补偿
+        # 构造waypoint3
+        # 同时目标点下降30mm, 构造waypoint4
+
+        waypoint3 = self.move_up_down(waypoint2, -52)
+        waypoint4 = self.move_up_down(target_point, -52)
+
+        # 4、waypoint4向前移动20mm
+        # 构造点waypoint5
+
+        waypoint5 = self.move_forward(waypoint4, 60)
+        
+        points = [process_start_point, waypoint1, waypoint3, waypoint5]
+        """
+
+        logger.info(f">>>>>>>>>>>>>> point list is : {points}")
 
         # 执行运动
         self.execute_standard_motion_sequence(process_addr, points)

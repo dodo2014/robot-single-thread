@@ -1,70 +1,85 @@
-
 {
-	//相机参数
-    "camera_fx": 735.0,
-    "camera_fy": 735.0,
-    "camera_cx": 640.0,
-    "camera_cy": 400.0,
-    "depth_invalid": 0,
+	// ==================== 相机内参配置 ====================
+    "camera_fx": 735.0,           // 相机X方向焦距（像素单位），用于像素坐标转世界坐标
+    "camera_fy": 735.0,           // 相机Y方向焦距（像素单位），用于像素坐标转世界坐标
+    "camera_cx": 640.0,           // 相机光心X坐标（像素单位），图像中心点
+    "camera_cy": 400.0,           // 相机光心Y坐标（像素单位），图像中心点
+    "depth_invalid": 0,            // 深度图中无效像素的值（通常为0）
 	
-	//结果排序规则
-    "sort_rule": 0,
+	// ==================== 结果排序规则 ====================
+    "sort_rule": 0,                // 检测结果排序规则：
+                                   // 0: 按Y降序（从ROI底部向上扫描，找第一个水平直线）
+                                   // 1: 按Y升序（从ROI顶部向下扫描，找第一个水平直线）
+                                   // 2: 按X降序
+                                   // 3: 按X升序
+                                   // 4: 按面积降序
+                                   // 5: 按深度升序
+                                   // 6: 按ID升序
 	
-	//预处理参数
-	"median_blur_kernel": 3,
-    "gaussian_sigma": 1.2,
+	// ==================== 图像预处理参数 ====================
+	"median_blur_kernel": 3,       // 中值滤波核大小（奇数），用于去除深度图椒盐噪声
+    "gaussian_sigma": 1.2,         // 高斯滤波标准差，用于平滑深度图
 	
-	//工具坐标
-	"tool_coord_x":0,
-	"tool_coord_y":0,
-	"tool_coord_z":0,
-	"tool_coord_r":0,
+	// ==================== 机械臂工具坐标偏移 ====================
+	"tool_coord_x": 0,              // 工具相对于相机中心的X轴偏移（mm）
+	"tool_coord_y": 0,              // 工具相对于相机中心的Y轴偏移（mm）
+	"tool_coord_z": 0,              // 工具相对于相机中心的Z轴偏移（mm）
+	"tool_coord_r": 0,              // 工具旋转角度偏移（度）
 	
-	// 上料ROI
-	"feed_roi_x": 250,
-	"feed_roi_y": 60,
-	"feed_roi_w": 800,
-	"feed_roi_h": 450,
+	// ==================== 产品尺寸参数 ====================
+	"product_height": 117,          // 单个产品的高度（mm），用于分层检测
+	"product_width": 122,           // 单个产品的宽度（mm），用于过滤直线
+	"interval_height": 20,          // 层与层之间间隔木条的高度（mm）
+	"tray_start_height": 1000,      // 托盘初始高度（mm），第一层产品的基准深度
+	"product_count_per_layer": 8,  // 上料每层产品数量
 	
-	// 上料算法参数
-	"feed_depth_min": 50,
-	"feed_depth_max": 1700,
-	"feed_min_length": 500,
+	// ==================== 上料区域配置 ====================
+	"feed_roi_x": 250,              // 上料ROI左上角X坐标（像素）
+	"feed_roi_y": 90,                // 上料ROI左上角Y坐标（像素）
+	"feed_roi_w": 844,              // 上料ROI宽度（像素）
+	"feed_roi_h": 658,              // 上料ROI高度（像素）
 	
-	// 物料缓存台ROI + 深度范围
-	"material_roi_x": 0,
-	"material_roi_y": 0,
-	"material_roi_w": 320,
-	"material_roi_h": 240,
-	"material_depth_min": 400,
-	"material_depth_max": 600,
-	
-	// YOLO检测ROI
-	"yolo_roi_x": 320,
-	"yolo_roi_y": 0,
-	"yolo_roi_w": 320,
-	"yolo_roi_h": 480,
-	
-	// YOLO算法配置
-	"yolov4_cfg_path": "./model/iron_chip.cfg",
-    "yolov4_weights_path": "./model/iron_chip.weights",
-    "yolov4_names_path": "./model/iron_chip.names",
-    "yolov4_conf_threshold": 0.1,
-    "yolov4_nms_threshold": 0.45,
-	"yolo_input_w": 608,
-	"yolo_input_h": 608,
-	
-	// 下料配置
-	"unload_roi_x": 350,
-	"unload_roi_y": 50,
-	"unload_roi_w": 700,
-	"unload_roi_h": 600,
-	"unload_layer_count": 6,
-	"unload_layer_height": 100,
-	"unload_item_count_per_layer": 8,
-	"unload_item_interval": 10,
-	"unload_item_width": 600,
-	"unload_item_height": 60,
-	"unload_depth_threshold": 20
-}
+	// ==================== 上料算法参数 ====================
+	"feed_depth_min": 400,          // 上料区域有效深度最小值（mm），过滤近距离噪声
+	"feed_depth_max": 1500,         // 上料区域有效深度最大值（mm），过滤远距离背景
+	"feed_min_length": 200,         // 产品最小宽度（像素），用于过滤过短的直线
+	"feed_edge_index": 1,			// 抓取上料产品边缘的序号（0表示第一个，1表示第二个）
 
+	// ==================== 物料缓存台配置 ====================
+	"material_roi_x": 0,             // 物料缓存台ROI左上角X坐标（像素）
+	"material_roi_y": 0,             // 物料缓存台ROI左上角Y坐标（像素）
+	"material_roi_w": 320,           // 物料缓存台ROI宽度（像素）
+	"material_roi_h": 240,           // 物料缓存台ROI高度（像素）
+	"material_depth_min": 400,       // 物料存在的最小深度（mm），低于此值可能无物料
+	"material_depth_max": 600,       // 物料存在的最大深度（mm），高于此值可能无物料
+	
+	// ==================== YOLO铁屑检测配置 ====================
+	"yolo_roi_x": 320,               // YOLO检测ROI左上角X坐标（像素）
+	"yolo_roi_y": 0,                 // YOLO检测ROI左上角Y坐标（像素）
+	"yolo_roi_w": 320,               // YOLO检测ROI宽度（像素）
+	"yolo_roi_h": 480,               // YOLO检测ROI高度（像素）
+	
+	// ==================== YOLO算法配置 ====================
+	"yolov4_cfg_path": "./model/iron_chip.cfg",         // YOLOv4网络配置文件路径
+	"yolov4_weights_path": "./model/iron_chip.weights", // YOLOv4训练权重文件路径
+	"yolov4_names_path": "./model/iron_chip.names",     // 类别名称文件路径（每行一个类别）
+	"yolov4_conf_threshold": 0.1,                       // 置信度阈值，低于此值的检测结果将被过滤
+	"yolov4_nms_threshold": 0.45,                       // 非极大值抑制阈值，用于去除重叠框
+	"yolo_input_w": 608,               // YOLO网络输入图像宽度（像素）
+	"yolo_input_h": 608,               // YOLO网络输入图像高度（像素）
+	
+	// ==================== 下料区域配置 ====================
+	"unload_roi_x": 350,               // 下料区域ROI左上角X坐标（像素）
+	"unload_roi_y": 50,                // 下料区域ROI左上角Y坐标（像素）
+	"unload_roi_w": 700,               // 下料区域ROI宽度（像素）
+	"unload_roi_h": 600,               // 下料区域ROI高度（像素）
+	
+	// ==================== 下料算法参数 ====================
+	"unload_layer_count": 6,           // 下料区域总层数
+	"unload_layer_height": 100,        // 每层高度（mm），用于计算不同层的深度
+	"unload_item_count_per_layer": 8,  // 每层可放置的产品数量
+	"unload_item_interval": 10,        // 同层产品之间的间隔（像素）
+	"unload_item_width": 600,          // 产品在下料区域的宽度（像素）
+	"unload_item_height": 60,          // 产品在下料区域的高度（像素）
+	"unload_depth_threshold": 20       // 深度差异阈值（mm），用于判断该位置是否有物料
+}

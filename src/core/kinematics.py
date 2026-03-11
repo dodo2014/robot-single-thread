@@ -16,6 +16,34 @@ class ScaraKinematics:
     """
 
     @staticmethod
+    def validate_joint_limits(j1, j2, j4):
+        """
+        统一校验机械臂关节 J1, J2, J4 是否超出物理软限位
+        """
+        try:
+            # 读取限位配置
+            j1_max, j1_min = const.J1_LIMIT_MAX, const.J1_LIMIT_MIN
+            j2_max, j2_min = const.J2_LIMIT_MAX, const.J2_LIMIT_MIN
+            j4_max, j4_min = const.J4_LIMIT_MAX, const.J4_LIMIT_MIN
+        except AttributeError as e:
+            logger.error(f"限位配置读取失败，请检查 const.py 中是否配置了各轴极限: {e}")
+            return False
+
+        if not (j1_min <= j1 <= j1_max):
+            logger.debug(f"限位校验失败: J1 ({j1:.2f}°) 越界 [{j1_min}, {j1_max}]")
+            return False
+
+        if not (j2_min <= j2 <= j2_max):
+            logger.debug(f"限位校验失败: J2 ({j2:.2f}°) 越界 [{j2_min}, {j2_max}]")
+            return False
+
+        if not (j4_min <= j4 <= j4_max):
+            logger.debug(f"限位校验失败: J4 ({j4:.2f}°) 越界[{j4_min}, {j4_max}]")
+            return False
+
+        return True
+
+    @staticmethod
     def inverse_kinematics(xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up'):
         """
         计算SCARA机械臂的逆运动学解
@@ -63,6 +91,11 @@ class ScaraKinematics:
             motor_turns = float(solution_3)
             z_displacement = motor_turns / nn3
             theta4 = float(solution_4) / pp
+
+            # 校验限位
+            if not ScaraKinematics.validate_joint_limits(theta1, theta2, theta4):
+                logger.warning(f"逆运动学求解结果超出关节物理限位")
+                return None
 
             results = []
             results.append({
@@ -167,6 +200,15 @@ class ScaraKinematics:
             # 原始代码 eq4 = sp.Eq(th4, ep) ，是直接控制第四轴电机达到绝对角度或相对角度
             # 保持与原代码逻辑一致：直接将目标角度作为结果
             theta4 = te
+
+            theta1_deg = math.degrees(theta1)
+            theta2_deg = math.degrees(theta2)
+
+            # --- 核心限位校验拦截 ---
+            if not ScaraKinematics.validate_joint_limits(theta1_deg, theta2_deg, theta4):
+                logger.warning(
+                    f"[{config_type}] 逆解算成功，但结果超出物理限位: J1={theta1_deg:.2f}, J2={theta2_deg:.2f}, J4={theta4:.2f}")
+                return None
 
             # 转换为角度制 (如果输入已经是角度，输出根据需要转换)
             # 注意：math库计算的是弧度，如果控制器需要角度，请转换
@@ -311,7 +353,8 @@ class ScaraKinematics:
             logger.info(f"自动选择姿态: Elbow Down (变动 {diff_down:.2f}°)")
             return res_down
 
-    def calculate_j4_from_world_angle(self, j1, j2, target_world_r):
+    @staticmethod
+    def calculate_j4_from_world_angle(j1, j2, target_world_r):
         """
         根据给定的 J1, J2 和目标世界角度，反算 J4 电机角度
         公式: J4 = World_R - (J1 + J2)
@@ -328,7 +371,8 @@ class ScaraKinematics:
 
         return j4
 
-    def calculate_world_angle_from_j4(self, xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up'):
+    @staticmethod
+    def calculate_world_angle_from_j4(xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up'):
         ik_res = ScaraKinematics.inverse_kinematics_v2(
             xe, ye, ze, te,
             l1, l2, z0, nn3,
@@ -394,6 +438,11 @@ class ScaraKinematics:
         while target_r > 180: target_r -= 360
         while target_r <= -180: target_r += 360
 
+        # --- 重要：因为 J4(target_r) 是重新计算的，我们需要再次验证组合后的整体限位 ---
+        if not ScaraKinematics.validate_joint_limits(j1_new, j2_new, target_r):
+            logger.error(f"平移计算失败: 平移补偿后的姿态超出 J4 限位 (目标 J4={target_r:.2f}°)")
+            return None
+
         logger.info(f"平移计算: dist={distance}, World_R={world_r:.2f}°")
         logger.info(f"  Pos: ({xe:.2f}, {ye:.2f}) -> ({target_x:.2f}, {target_y:.2f})")
         logger.info(f"  J4:  {te:.2f} -> {target_r:.2f} (补偿手臂旋转)")
@@ -407,8 +456,8 @@ if __name__ == "__main__":
     # 逆解结果: the1=-12.5558, the2=137.7314, the3=40.0(假设z0=0) 或 90.0(假设z0=50), th4=95.0
 
     # 假设参数
-    # L1 = 850
-    # L2 = 650.0
+    # L1 = 740
+    # L2 = 640.0
     # Z0 = 0.0  # 假设 Z0 为 0
     # NN3 = 0.05
 
@@ -422,9 +471,9 @@ if __name__ == "__main__":
     # print(f"输入关节角: J1={t1:.4f}, J2={t2:.4f}, J3={t3}, J4={t4}")
     #
     # obj = ScaraKinematics()
-    #
+    # #
     # fk_res = obj.forward_kinematics(t1, t2, t3, t4, L1, L2, Z0, NN3)
-    #
+
     # print(f"计算结果: {fk_res}")
     # print("预期目标: {'x': 1324.9369, 'y': -419.5327, 'z': -2.72, 'r': 0.0, 'config': 'elbow_up'}")
     #

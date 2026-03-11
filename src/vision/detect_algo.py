@@ -11,6 +11,7 @@ from src.vision.orbbec_camera import OrbbecCameraDevice
 from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
 from src.utils.path_helper import get_camera_img_dir
 from src.utils import logger
+from src.consts import const
 
 # 导入编译好的 C++ 模块 (cpp_algo.so)
 try:
@@ -24,8 +25,8 @@ class DetectAlgoService:
         self.product_no = product_no
         self.save_dir = save_dir
         self.device = OrbbecCameraDevice()
-        self.max_retries = 3
-
+        self.max_retries = 10
+        self.depth_show = 1
         # 初始化 C++ 算法
         # self.algo = cpp_algo.MaterialAlgorithm()
         # init_res = self.algo.initialize(self.product_no)
@@ -110,10 +111,11 @@ class DetectAlgoService:
         cv2.imwrite(f"{path}/depth_{timestamp}.png", depth_arr)
         return f"{path}/rgb_{timestamp}.jpg"
 
-    def execute_detection(self, ptype: int):
+    def execute_detection(self, ptype: int, detect: int=0):
         """
         对外公开的同步业务接口
         :param ptype, 1-普通, 2-上料, 3-下料, 4-铝屑
+        :param detect, 是否执行检测，0-只拍照，不检测，1-执行检测
         :return
             {
                 "code": 0,    #  正常返回0，异常返回其他值
@@ -143,9 +145,17 @@ class DetectAlgoService:
             success, color_frame, depth_frame = self.device.get_frames()
             if not success:
                 last_err = "Failed to capture frames"
-                # 采集失败通常意味着链路抖动，尝试重新初始化 pipeline
-                self.device.connect()
+                time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
+                # 只有当连续多次（例如超过3次）都拿不到图时，才真正去重启相机
+                if attempt >= 3:
+                    logger.warning("Multiple consecutive frame drops, re-initializing pipeline...")
+                    self.device.connect()
+                # # 采集失败通常意味着链路抖动，尝试重新初始化 pipeline
+                # self.device.connect()
                 continue
+
+            if not detect:
+                return {"code": 0, "result": {"ok": 1, "coords": [0, 0, 0, 0]}, "err_msg": ""}
 
             try:
                 # 彩色图转换: RGB888 每个像素 3 字节 (uint8)
@@ -175,6 +185,7 @@ class DetectAlgoService:
                     # 处理其他可能的格式（如 YUYV）
                     # 这里建议打印一下当前的格式，方便调试
                     print(f"Unsupported format for direct reshape: {color_format}")
+                    logger.error(f"Unsupported format: {color_format}")
                     # 这种情况下通常需要专门的转换函数
                     return {"code": -1, "err_msg": f"Unsupported format {color_format}"}
 
@@ -182,8 +193,15 @@ class DetectAlgoService:
                 # 使用 np.frombuffer 并指定 dtype=np.uint16
                 # depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16)
                 # depth_img = depth_data.reshape((f_height, f_width)).copy()
+
+                # depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
+                #     (f_height, f_width)).copy()
+
+                d_height = depth_frame.get_height()  # 获取深度帧实际高度
+                d_width = depth_frame.get_width()  # 获取深度帧实际宽度
+
                 depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
-                    (f_height, f_width)).copy()
+                    (d_height, d_width)).copy()
 
                 # 本地持久化
                 # self._save_to_local(color_img, depth_img)
@@ -199,8 +217,8 @@ class DetectAlgoService:
 
                 # 5. 二进制处理 (传递给 C++ 算法)
                 # 直接获取原始内存 Buffer 的 bytes 形式
-                rgb_binary = color_frame.get_data().tobytes()
-                depth_binary = depth_frame.get_data().tobytes()
+                # rgb_binary = color_frame.get_data().tobytes()
+                # depth_binary = depth_frame.get_data().tobytes()
 
                 # 6. 调用 C++ 算法
                 # result = self.algo.detect(ptype, rgb_binary, depth_binary)
@@ -209,14 +227,26 @@ class DetectAlgoService:
                 result = self.detector.detect(ptype, color_img, depth_img)
 
                 # logger.info(f"detector result: {result}")
-                #
-                # depth_color = self.detector.depth_pseudo_color(depth_img)
-                #
-                # result_img = self.detector.draw_result_with_rotated_box(depth_color, result)
-                # cv2.imshow("result-line", result_img)
-                # cv2.imwrite("./detect_result_horizontal_line.jpg", result_img)
-                #
-                # cv2.waitKey(0)
+
+                if self.depth_show:
+                    timestamp = int(time.time() * 1000)
+                    date_str = time.strftime("%Y%m%d", time.localtime(timestamp / 1000))
+                    path = os.path.join(self.save_dir, date_str)
+
+                    depth_color = self.detector.depth_pseudo_color(depth_img)
+                    result_img = self.detector.draw_result_with_rotated_box(depth_color, result)
+                    # cv2.imshow("result-line", result_img)
+
+                    cv2.imwrite(f"{path}/detect_result_horizontal_line_{timestamp}.jpg", result_img)
+
+                    cv2.waitKey(0)
+
+                logger.info(f"detect result : {result}")
+
+                # 显式释放底层 C++ 帧缓冲！！非常重要！！
+                # 让 pyorbbecsdk 立即将 Buffer 归还给 SDK，防止缓存池枯竭
+                del color_frame
+                del depth_frame
 
                 return result
 
@@ -224,9 +254,58 @@ class DetectAlgoService:
 
             except Exception as e:
                 last_err = str(e)
+                print(f"Error in image save queue: {traceback.format_exc()}")
                 logger.error(f"Processing error: {e} \n traceback: {traceback.format_exc()}")
+                # 如果发生异常，确保释放帧，防止内存泄漏
+                if 'color_frame' in locals(): del color_frame
+                if 'depth_frame' in locals(): del depth_frame
 
+        logger.info(f"Processing error: Max retries reached. {last_err}")
         return {"code": -1, "err_msg": f"Max retries reached. Last error: {last_err}"}
+
+    def execute_detection_midian_depth(self, ptype:int, number:int=15):
+        """获取深度值的中位数返回值"""
+        results = []
+        for idx in range(number):
+            if idx < 7:
+                self.execute_detection(ptype, idx)
+            else:
+                result = self.execute_detection(ptype, detect=1)
+                print(f"result is : {result}")
+
+                if result["code"] == 0:
+                    results.append(result)
+
+            # 给底层 USB 留出喘息时间，避免阻塞 (30fps = 33ms 一张)
+            time.sleep(0.01)
+
+        print("#########################################")
+
+        if len(results) == 0:
+            return {"code":-99, "err_msg":f"检测异常: 中位数处理返回空数组"}
+
+        if ptype in (const.photo_type_loading, const.photo_type_unloading):
+            sorted_result = sorted(
+                results,
+                key=lambda x: x["result"]["coords"][2]  # x代表每个item，取z值（索引2）
+            )
+            print(f"sorted result len :{len(sorted_result)}, result: {sorted_result}")
+
+            z_values = [item['result']['coords'][2] for item in sorted_result]
+            z_average = sum(z_values) / len(z_values)
+
+            r_values = [item['result']['coords'][3] for item in sorted_result]
+            r_average = sum(r_values) / len(r_values)
+
+            midian_result = sorted_result[int(len(sorted_result)/2)]
+            midian_result["result"]["coords"][3] = r_average
+            # midian_result["result"]["coords"][2] = z_average
+
+
+            return midian_result
+
+        return results[int(len(results)/2)]
+
 
     def shutdown(self):
         """释放资源"""
@@ -254,18 +333,18 @@ class DetectAlgoService:
 def main():
     # 初始化业务类
     service = DetectAlgoService(product_no="M001")
-
+    service.depth_show = 1
     # time.sleep(3)
 
     try:
         # 上位机发起一次同步调用
         # ptype: 1 (物料识别)
-        # for i in range(50):
-        # time.sleep(1)
+        # for i in range(200):
+            # time.sleep(0.2)
 
-        # start_time = time.time()
-        # print(f"{i} time Starting detection...")
-        response = service.execute_detection(ptype=2)
+        start_time = round(time.time() * 1000)
+        # response = service.execute_detection(ptype=2)
+        response = service.execute_detection_midian_depth(ptype=2)
         print(response)
 
         # 处理结果
@@ -274,8 +353,8 @@ def main():
             print(f"Detection OK: {response}")
         else:
             print(f"Detection Failed: {response['err_msg']}")
-        end_time = time.time()
-        # print(f"Detection Time: {end_time - start_time}")
+        end_time = round(time.time() * 1000)
+        print(f"Detection Time: {end_time - start_time}")
 
     finally:
         service.shutdown()

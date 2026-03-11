@@ -25,7 +25,7 @@
             "camera": {
                     "offset_x": 157.0,   // 假设相机在前方
                     "offset_y": 23.75,
-                    "rotation": 0
+                    "rotation": 0 
                 },
                 "main_gripper": {
                     "desc": "4号和5号夹爪的几何中心",

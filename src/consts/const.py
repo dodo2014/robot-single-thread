@@ -57,9 +57,20 @@ VAL_PAUSE_REQ = 10    # 暂停请求
 VAL_RESUME_REQ = 11   # 恢复请求
 VAL_RESET = 0         # 复位/空闲
 
-# 机械臂 J2 活动范围是 -145 到 +145 度
+# 机械臂J1活动范围
+J1_LIMIT_MAX = 98
+J1_LIMIT_MIN = -98
+
+# 机械臂 J2 活动范围
 J2_LIMIT_MAX = 113
 J2_LIMIT_MIN = -113
+
+# 机械臂J4活动范围
+J4_LIMIT_MAX = 120
+J4_LIMIT_MIN = -120
+
+# 设定精拍阈值 (mm)
+PRECISE_PHOTO_DISTANCE = 400.0
 
 # 上一个步骤的地址位映射
 last_process_addr_map = {
