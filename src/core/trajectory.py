@@ -348,6 +348,6 @@ if __name__ == "__main__":
           ]
         }]
     tobj = TrajectoryV2()
-    full_path = tobj.generate_cartesian_interpolated_path(raw_points)
+    full_path = tobj.generate_cartesian_interpolated_path(raw_points, num_inserts=0)
     print(full_path)
     print(len(full_path))

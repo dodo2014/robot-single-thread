@@ -246,15 +246,26 @@ class ConfigEditorUI(QMainWindow):
 
         right_layout.addLayout(form_proc_info)
 
-        # 点位表格
-        self.table_points = QTableWidget()
-        self.table_points.setColumnCount(7)
-        self.table_points.setHorizontalHeaderLabels(["点名称", "X", "Y", "Z", "R (te)", "Photo", "姿态"])
-        header = self.table_points.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
+        # # 点位表格
+        # self.table_points = QTableWidget()
+        # self.table_points.setColumnCount(7)
+        # self.table_points.setHorizontalHeaderLabels(["点名称", "X", "Y", "Z", "R (te)", "Photo", "姿态"])
+        # header = self.table_points.horizontalHeader()
+        # header.setSectionResizeMode(QHeaderView.Stretch)
+        #
+        # # header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        # right_layout.addWidget(self.table_points)
 
-        # header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        right_layout.addWidget(self.table_points)
+        # 【核心修改】创建内部 TabWidget 管理两个表格
+        self.tabs_points = QTabWidget()
+
+        self.table_normal_points = self._create_points_table()
+        self.tabs_points.addTab(self.table_normal_points, "普通点位 (points)")
+
+        self.table_search_points = self._create_points_table()
+        self.tabs_points.addTab(self.table_search_points, "阵列搜寻点位 (search_points)")
+
+        right_layout.addWidget(self.tabs_points)
 
         # 点位操作按钮
         btn_layout = QHBoxLayout()
@@ -475,7 +486,62 @@ class ConfigEditorUI(QMainWindow):
         layout.addLayout(bottom_layout)
 
     # === 逻辑处理部分 ===
-    def _set_row_elbow_combo(self, row, current_val="elbow_up"):
+    def _create_points_table(self):
+        """创建一个标准的点位表格控件"""
+        table = QTableWidget()
+        table.setColumnCount(7)
+        table.setHorizontalHeaderLabels(["点名称", "X", "Y", "Z", "R (te)", "Photo", "姿态"])
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        return table
+
+    def _get_current_active_table(self):
+        """获取当前正在显示的那个表格对象"""
+        return self.tabs_points.currentWidget()
+
+    def _populate_points_table(self, table, points_data):
+        """向指定的表格中填充数据"""
+        table.setRowCount(len(points_data))
+        table.setSortingEnabled(False)
+
+        for i, pt in enumerate(points_data):
+            table.setItem(i, 0, QTableWidgetItem(str(pt.get('name', ''))))
+            coords = pt.get('coords', [0, 0, 0, 0])
+            for j in range(4):
+                val = f"{coords[j]:.2f}"
+                table.setItem(i, j + 1, QTableWidgetItem(val))
+            table.setItem(i, 5, QTableWidgetItem(str(pt.get('photo', 0))))
+
+            current_config = pt.get('config', 'elbow_up')
+            self._set_row_elbow_combo(table, i, current_val=current_config)
+
+        table.setSortingEnabled(False)
+
+    def _extract_points_from_table(self, table):
+        """从指定的表格中提取数据生成列表"""
+        extracted_points = []
+        rows = table.rowCount()
+        for i in range(rows):
+            name = table.item(i, 0).text()
+            x = float(table.item(i, 1).text())
+            y = float(table.item(i, 2).text())
+            z = float(table.item(i, 3).text())
+            r = float(table.item(i, 4).text())
+            photo = int(table.item(i, 5).text())
+
+            combo = table.cellWidget(i, 6)
+            config_val = combo.currentText() if combo else "elbow_up"
+
+            extracted_points.append({
+                "name": name,
+                "coords": [x, y, z, r],
+                "photo": photo,
+                "config": config_val
+            })
+        return extracted_points
+
+
+    def _set_row_elbow_combo(self, table, row, current_val="elbow_up"):
         """辅助函数：给指定行设置姿态下拉框"""
         combo_config = QComboBox()
         combo_config.addItems(["elbow_up", "elbow_down"])
@@ -484,57 +550,67 @@ class ConfigEditorUI(QMainWindow):
         if idx >= 0:
             combo_config.setCurrentIndex(idx)
         else:
-            combo_config.setCurrentIndex(0)  # 默认
+            combo_config.setCurrentIndex(0)
 
-        self.table_points.setCellWidget(row, 6, combo_config)
+        table.setCellWidget(row, 6, combo_config)
 
-    def swap_table_rows(self, row1, row2):
+    def swap_table_rows(self, table, row1, row2):
         """核心逻辑：交换两行的数据"""
-        # 1. 交换普通单元格 (0-5列)
         for col in range(6):
-            item1 = self.table_points.takeItem(row1, col)
-            item2 = self.table_points.takeItem(row2, col)
-            self.table_points.setItem(row2, col, item1)
-            self.table_points.setItem(row1, col, item2)
+            item1 = table.takeItem(row1, col)
+            item2 = table.takeItem(row2, col)
+            table.setItem(row2, col, item1)
+            table.setItem(row1, col, item2)
 
-        # 2. 交换下拉框 (第6列/index 6)
-        # Qt 的 setCellWidget 会销毁旧的 widget，所以必须读取值后重新创建
-        combo1 = self.table_points.cellWidget(row1, 6)
-        combo2 = self.table_points.cellWidget(row2, 6)
+        combo1 = table.cellWidget(row1, 6)
+        combo2 = table.cellWidget(row2, 6)
 
         val1 = combo1.currentText() if combo1 else "elbow_up"
         val2 = combo2.currentText() if combo2 else "elbow_up"
 
-        self._set_row_elbow_combo(row2, val1)
-        self._set_row_elbow_combo(row1, val2)
+        self._set_row_elbow_combo(table, row2, val1)
+        self._set_row_elbow_combo(table, row1, val2)
 
     def move_point_up(self):
         """上移当前行"""
-        row = self.table_points.currentRow()
-        # 如果没选中，或者已经是第一行，无法上移
-        if row <= 0:
-            return
+        # row = self.table_points.currentRow()
+        # # 如果没选中，或者已经是第一行，无法上移
+        # if row <= 0:
+        #     return
+        #
+        # # 交换当前行与上一行
+        # self.swap_table_rows(row, row - 1)
+        # # 保持选中状态跟随移动
+        # self.table_points.setCurrentCell(row - 1, 0)
 
-        # 交换当前行与上一行
-        self.swap_table_rows(row, row - 1)
+        active_table = self._get_current_active_table()
+        row = active_table.currentRow()
+        if row <= 0: return
+        self.swap_table_rows(active_table, row, row - 1)
+        active_table.setCurrentCell(row - 1, 0)
 
-        # 保持选中状态跟随移动
-        self.table_points.setCurrentCell(row - 1, 0)
 
     def move_point_down(self):
         """下移当前行"""
-        row = self.table_points.currentRow()
-        count = self.table_points.rowCount()
+        # row = self.table_points.currentRow()
+        # count = self.table_points.rowCount()
+        #
+        # # 如果没选中，或者是最后一行，无法下移
+        # if row < 0 or row >= count - 1:
+        #     return
+        #
+        # # 交换当前行与下一行
+        # self.swap_table_rows(row, row + 1)
+        #
+        # # 保持选中状态跟随移动
+        # self.table_points.setCurrentCell(row + 1, 0)
 
-        # 如果没选中，或者是最后一行，无法下移
-        if row < 0 or row >= count - 1:
-            return
-
-        # 交换当前行与下一行
-        self.swap_table_rows(row, row + 1)
-
-        # 保持选中状态跟随移动
-        self.table_points.setCurrentCell(row + 1, 0)
+        active_table = self._get_current_active_table()
+        row = active_table.currentRow()
+        count = active_table.rowCount()
+        if row < 0 or row >= count - 1: return
+        self.swap_table_rows(active_table, row, row + 1)
+        active_table.setCurrentCell(row + 1, 0)
 
     def map_modbus_address(self, full_address):
         """
@@ -645,19 +721,16 @@ class ConfigEditorUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载配置文件失败: {e}")
 
-    # def on_process_selected(self, row):
-    #     """刷新右侧显示"""
-    #     if row < 0:
-    #         # 如果没有选中项，清空右侧
-    #         self.lbl_proc_name.clear()
-    #         self.lbl_proc_type.clear()
-    #         self.lbl_proc_d_addr.clear()
-    #         self.table_points.setRowCount(0)
-    #         return
-    #
-    #     pid = self.list_processes.item(row).text()
 
     def on_process_selected(self, current_item, previous_item):
+        if not current_item:
+            self.lbl_proc_name.clear()
+            self.lbl_proc_type.clear()
+            self.lbl_proc_d_addr.clear()
+            self.table_normal_points.setRowCount(0)
+            self.table_search_points.setRowCount(0)
+            return
+
         pid = current_item.text(0)
         process_data = self.config_data['processes'].get(pid, {})
 
@@ -680,6 +753,7 @@ class ConfigEditorUI(QMainWindow):
 
         self.lbl_proc_d_addr.setText(str(d_addr))
 
+        """
         points = process_data.get('points', [])
         self.table_points.setRowCount(len(points))
 
@@ -717,17 +791,13 @@ class ConfigEditorUI(QMainWindow):
             self._set_row_elbow_combo(i, current_val=current_config)
 
         self.table_points.setSortingEnabled(False)  # 表格通常不需要排序，容易乱序
+        """
+        # 【核心修改】分别填充两个表格
+        normal_points = process_data.get('points', [])
+        search_points = process_data.get('search_points', [])
 
-    # def on_process_selected_v1(self, current_item, previous_item):
-    #     if not current_item:
-    #         # 清空右侧
-    #         self.lbl_proc_name.clear()
-    #         self.lbl_proc_type.clear()
-    #         self.lbl_proc_d_addr.clear()
-    #         self.table_points.setRowCount(0)
-    #         return
-    #
-    #
+        self._populate_points_table(self.table_normal_points, normal_points)
+        self._populate_points_table(self.table_search_points, search_points)
 
     def add_process_item(self):
         """新增一个动作流程"""
@@ -822,16 +892,54 @@ class ConfigEditorUI(QMainWindow):
             if self.controller:
                 self.controller.reload_config()
 
+    # def teach_current_position(self):
+    #     """示教功能：读取当前电机坐标并填入表格"""
+    #     if not self.controller:
+    #         return
+    #
+    #     # 从 Controller 获取实时缓存 [j1, j2, j3, j4]
+    #     # 注意：这里拿到的是关节角度/高度，需要根据你的业务需求决定填什么
+    #     # 如果你的 points 存的是 [x, y, z, r] (笛卡尔)，你需要在这里调用正运动学转一下
+    #     # 假设 Controller 有 get_realtime_point 返回的是 {coords: [x,y,z,r]}
+    #
+    #     try:
+    #         real_point = self.controller.get_realtime_point()
+    #         if not real_point:
+    #             QMessageBox.warning(self, "错误", "无法获取当前机械臂坐标")
+    #             return
+    #
+    #         x, y, z, r = real_point['coords']
+    #         # 获取实时的姿态 (elbow_up/down)
+    #         current_elbow = real_point.get('config', 'elbow_up')
+    #
+    #         # 添加新行
+    #         # row = self.table_points.rowCount()
+    #         # self.table_points.insertRow(row)
+    #
+    #         current_row = self.table_points.currentRow()
+    #         if current_row >= 0:
+    #             insert_idx = current_row + 1
+    #         else:
+    #             insert_idx = self.table_points.rowCount()
+    #
+    #         self.table_points.insertRow(insert_idx)
+    #
+    #         self.table_points.setItem(insert_idx, 0, QTableWidgetItem(f"Teach_P{insert_idx + 1}"))
+    #         self.table_points.setItem(insert_idx, 1, QTableWidgetItem(f"{x:.2f}"))
+    #         self.table_points.setItem(insert_idx, 2, QTableWidgetItem(f"{y:.2f}"))
+    #         self.table_points.setItem(insert_idx, 3, QTableWidgetItem(f"{z:.2f}"))
+    #         self.table_points.setItem(insert_idx, 4, QTableWidgetItem(f"{r:.2f}"))
+    #         self.table_points.setItem(insert_idx, 5, QTableWidgetItem("0"))
+    #
+    #         self._set_row_elbow_combo(insert_idx, current_val=current_elbow)
+    #         # 自动选中新行
+    #         self.table_points.setCurrentCell(insert_idx, 0)
+    #
+    #     except Exception as e:
+    #         QMessageBox.warning(self, "异常", f"示教失败: {e}")
+
     def teach_current_position(self):
-        """示教功能：读取当前电机坐标并填入表格"""
-        if not self.controller:
-            return
-
-        # 从 Controller 获取实时缓存 [j1, j2, j3, j4]
-        # 注意：这里拿到的是关节角度/高度，需要根据你的业务需求决定填什么
-        # 如果你的 points 存的是 [x, y, z, r] (笛卡尔)，你需要在这里调用正运动学转一下
-        # 假设 Controller 有 get_realtime_point 返回的是 {coords: [x,y,z,r]}
-
+        if not self.controller: return
         try:
             real_point = self.controller.get_realtime_point()
             if not real_point:
@@ -839,75 +947,76 @@ class ConfigEditorUI(QMainWindow):
                 return
 
             x, y, z, r = real_point['coords']
-            # 获取实时的姿态 (elbow_up/down)
             current_elbow = real_point.get('config', 'elbow_up')
 
-            # 添加新行
-            # row = self.table_points.rowCount()
-            # self.table_points.insertRow(row)
+            active_table = self._get_current_active_table()
+            current_row = active_table.currentRow()
+            insert_idx = current_row + 1 if current_row >= 0 else active_table.rowCount()
 
-            current_row = self.table_points.currentRow()
-            if current_row >= 0:
-                insert_idx = current_row + 1
-            else:
-                insert_idx = self.table_points.rowCount()
+            active_table.insertRow(insert_idx)
 
-            self.table_points.insertRow(insert_idx)
+            active_table.setItem(insert_idx, 0, QTableWidgetItem(f"Teach_P{insert_idx + 1}"))
+            active_table.setItem(insert_idx, 1, QTableWidgetItem(f"{x:.2f}"))
+            active_table.setItem(insert_idx, 2, QTableWidgetItem(f"{y:.2f}"))
+            active_table.setItem(insert_idx, 3, QTableWidgetItem(f"{z:.2f}"))
+            active_table.setItem(insert_idx, 4, QTableWidgetItem(f"{r:.2f}"))
+            active_table.setItem(insert_idx, 5, QTableWidgetItem("0"))
 
-            self.table_points.setItem(insert_idx, 0, QTableWidgetItem(f"Teach_P{insert_idx + 1}"))
-            self.table_points.setItem(insert_idx, 1, QTableWidgetItem(f"{x:.2f}"))
-            self.table_points.setItem(insert_idx, 2, QTableWidgetItem(f"{y:.2f}"))
-            self.table_points.setItem(insert_idx, 3, QTableWidgetItem(f"{z:.2f}"))
-            self.table_points.setItem(insert_idx, 4, QTableWidgetItem(f"{r:.2f}"))
-            self.table_points.setItem(insert_idx, 5, QTableWidgetItem("0"))
-
-            # === 【新增】设置示教的姿态 ===
-            # combo_config = QComboBox()
-            # combo_config.addItems(["elbow_up", "elbow_down"])
-            #
-            # # 自动选中当前机械臂的姿态
-            # idx = combo_config.findText(current_elbow)
-            # if idx >= 0:
-            #     combo_config.setCurrentIndex(idx)
-            #
-            # self.table_points.setCellWidget(insert_idx, 6, combo_config)
-
-            self._set_row_elbow_combo(insert_idx, current_val=current_elbow)
-            # 自动选中新行
-            self.table_points.setCurrentCell(insert_idx, 0)
+            self._set_row_elbow_combo(active_table, insert_idx, current_val=current_elbow)
+            active_table.setCurrentCell(insert_idx, 0)
 
         except Exception as e:
             QMessageBox.warning(self, "异常", f"示教失败: {e}")
 
+    # def add_point_row(self):
+    #     current_row = self.table_points.currentRow()
+    #     if current_row >= 0:
+    #         # 如果有选中行，插在选中行的下一行
+    #         insert_idx = current_row + 1
+    #     else:
+    #         # 如果没选中，插在表格末尾
+    #         insert_idx = self.table_points.rowCount()
+    #
+    #     # row = self.table_points.rowCount()
+    #     self.table_points.insertRow(insert_idx)
+    #     # 设置默认值
+    #     self.table_points.setItem(insert_idx, 0, QTableWidgetItem(f"P{insert_idx + 1}"))
+    #     for j in range(1, 6):
+    #         self.table_points.setItem(insert_idx, j, QTableWidgetItem("0"))
+    #
+    #     # combo_config = QComboBox()
+    #     # combo_config.addItems(["elbow_up", "elbow_down"])
+    #     # self.table_points.setCellWidget(insert_idx, 6, combo_config)
+    #
+    #     self._set_row_elbow_combo(insert_idx)
+    #
+    #     # 自动选中新添加的行
+    #     self.table_points.setCurrentCell(insert_idx, 0)
+    #
+    # def delete_point_row(self):
+    #     current_row = self.table_points.currentRow()
+    #     if current_row >= 0:
+    #         self.table_points.removeRow(current_row)
+
     def add_point_row(self):
-        current_row = self.table_points.currentRow()
-        if current_row >= 0:
-            # 如果有选中行，插在选中行的下一行
-            insert_idx = current_row + 1
-        else:
-            # 如果没选中，插在表格末尾
-            insert_idx = self.table_points.rowCount()
+        active_table = self._get_current_active_table()
+        current_row = active_table.currentRow()
 
-        # row = self.table_points.rowCount()
-        self.table_points.insertRow(insert_idx)
-        # 设置默认值
-        self.table_points.setItem(insert_idx, 0, QTableWidgetItem(f"P{insert_idx + 1}"))
+        insert_idx = current_row + 1 if current_row >= 0 else active_table.rowCount()
+
+        active_table.insertRow(insert_idx)
+        active_table.setItem(insert_idx, 0, QTableWidgetItem(f"P{insert_idx + 1}"))
         for j in range(1, 6):
-            self.table_points.setItem(insert_idx, j, QTableWidgetItem("0"))
+            active_table.setItem(insert_idx, j, QTableWidgetItem("0"))
 
-        # combo_config = QComboBox()
-        # combo_config.addItems(["elbow_up", "elbow_down"])
-        # self.table_points.setCellWidget(insert_idx, 6, combo_config)
-
-        self._set_row_elbow_combo(insert_idx)
-
-        # 自动选中新添加的行
-        self.table_points.setCurrentCell(insert_idx, 0)
+        self._set_row_elbow_combo(active_table, insert_idx)
+        active_table.setCurrentCell(insert_idx, 0)
 
     def delete_point_row(self):
-        current_row = self.table_points.currentRow()
+        active_table = self._get_current_active_table()
+        current_row = active_table.currentRow()
         if current_row >= 0:
-            self.table_points.removeRow(current_row)
+            active_table.removeRow(current_row)
 
     def save_global_config(self):
         """保存 Tab 1 的数据到 json"""
@@ -932,46 +1041,83 @@ class ConfigEditorUI(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "错误", "请输入有效的数字")
 
+    # def save_current_process(self):
+    #     """保存 Tab 2 的表格数据到 json"""
+    #     current_item = self.tree_processes.currentItem()
+    #     if not current_item:
+    #         return
+    #
+    #     # current_item.text(0)，表示获取第0列的文本
+    #     pid = current_item.text(0)
+    #
+    #     new_points = []
+    #
+    #     try:
+    #         rows = self.table_points.rowCount()
+    #         for i in range(rows):
+    #             name = self.table_points.item(i, 0).text()
+    #             x = float(self.table_points.item(i, 1).text())
+    #             y = float(self.table_points.item(i, 2).text())
+    #             z = float(self.table_points.item(i, 3).text())
+    #             r = float(self.table_points.item(i, 4).text())
+    #             photo = int(self.table_points.item(i, 5).text())
+    #
+    #             combo = self.table_points.cellWidget(i, 6)
+    #             if combo:
+    #                 config_val = combo.currentText()
+    #             else:
+    #                 config_val = "elbow_up"  # 默认值防止报错
+    #
+    #             new_points.append({
+    #                 "name": name,
+    #                 "coords": [x, y, z, r],
+    #                 "photo": photo,
+    #                 "config": config_val
+    #             })
+    #
+    #         # 更新内存数据
+    #         # 确保 pid 对应的字典存在
+    #         if pid not in self.config_data['processes']:
+    #             self.config_data['processes'][pid] = {}
+    #
+    #         self.config_data['processes'][pid]['name'] = self.lbl_proc_name.text()
+    #         self.config_data['processes'][pid]['type'] = self.lbl_proc_type.text()
+    #
+    #         try:
+    #             d_addr_val = int(self.lbl_proc_d_addr.text())
+    #             self.config_data['processes'][pid]['d_addr'] = d_addr_val
+    #         except ValueError:
+    #             pass  # 如果是 Error 字符串或其他非数字，则不保存
+    #
+    #         self.config_data['processes'][pid]['points'] = new_points
+    #
+    #         self._write_to_file()
+    #
+    #         # 通知后台重载
+    #         if self.controller:
+    #             self.controller.reload_config()
+    #
+    #         QMessageBox.information(self, "成功", "动作已保存，并已通知后台生效")
+    #     except ValueError as e:
+    #         QMessageBox.warning(self, "错误", f"数据格式错误: {e}")
+    #     except Exception as e:
+    #         # 捕获其他未知异常，防止崩溃
+    #         QMessageBox.critical(self, "系统错误", f"保存失败: {str(e)}")
+
     def save_current_process(self):
         """保存 Tab 2 的表格数据到 json"""
-        # current_item = self.list_processes.currentItem()
         current_item = self.tree_processes.currentItem()
         if not current_item:
             return
 
-        # pid = current_item.text()
-
-        # 以前是 current_item.text()
-        # 现在必须是 current_item.text(0)，表示获取第0列的文本
         pid = current_item.text(0)
 
-        new_points = []
-
         try:
-            rows = self.table_points.rowCount()
-            for i in range(rows):
-                name = self.table_points.item(i, 0).text()
-                x = float(self.table_points.item(i, 1).text())
-                y = float(self.table_points.item(i, 2).text())
-                z = float(self.table_points.item(i, 3).text())
-                r = float(self.table_points.item(i, 4).text())
-                photo = int(self.table_points.item(i, 5).text())
-
-                combo = self.table_points.cellWidget(i, 6)
-                if combo:
-                    config_val = combo.currentText()
-                else:
-                    config_val = "elbow_up"  # 默认值防止报错
-
-                new_points.append({
-                    "name": name,
-                    "coords": [x, y, z, r],
-                    "photo": photo,
-                    "config": config_val
-                })
+            # 【核心修改】分别从两个表格提取数据
+            new_points = self._extract_points_from_table(self.table_normal_points)
+            new_search_points = self._extract_points_from_table(self.table_search_points)
 
             # 更新内存数据
-            # 确保 pid 对应的字典存在
             if pid not in self.config_data['processes']:
                 self.config_data['processes'][pid] = {}
 
@@ -982,9 +1128,10 @@ class ConfigEditorUI(QMainWindow):
                 d_addr_val = int(self.lbl_proc_d_addr.text())
                 self.config_data['processes'][pid]['d_addr'] = d_addr_val
             except ValueError:
-                pass  # 如果是 Error 字符串或其他非数字，则不保存
+                pass
 
             self.config_data['processes'][pid]['points'] = new_points
+            self.config_data['processes'][pid]['search_points'] = new_search_points
 
             self._write_to_file()
 
@@ -996,7 +1143,6 @@ class ConfigEditorUI(QMainWindow):
         except ValueError as e:
             QMessageBox.warning(self, "错误", f"数据格式错误: {e}")
         except Exception as e:
-            # 捕获其他未知异常，防止崩溃
             QMessageBox.critical(self, "系统错误", f"保存失败: {str(e)}")
 
     def _write_to_file(self):

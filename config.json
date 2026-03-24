@@ -21,11 +21,11 @@
                 },
                 "main_gripper": {
                     "desc": "夹爪的几何中心",
-                    "offset_x": 78.0,
-                    "offset_y": 0.0,
+                    "offset_x": 155.0,
+                    "offset_y": 0,
                     "z_diff": 60.3,
                     "gripper_install_angle": -90,
-                    "angle_offset": 0.8
+                    "angle_offset": 0.5
                 }
             },
             {
@@ -229,29 +229,107 @@
             "type": "standard",
             "points": [
                 {
-                    "name": "P1",
-                    "coords": [
-                        1201.19,
-                        -38.06,
-                        20.0,
-                        -41.93
-                    ],
-                    "photo": 0,
-                    "config": "elbow_up"
-                },
-                {
                     "name": "Teach_P1",
                     "coords": [
-                        1307.7,
-                        -48.32,
-                        20.0,
-                        -31.36
+                        384.22,
+                        30.34,
+                        500.73,
+                        84.88
                     ],
                     "photo": 0,
-                    "config": "elbow_up"
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        654.21,
+                        83.68,
+                        500.73,
+                        85.29
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P3",
+                    "coords": [
+                        948.43,
+                        -199.49,
+                        500.73,
+                        85.29
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P4",
+                    "coords": [
+                        1253.8,
+                        -102.61,
+                        500.73,
+                        28.56
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P5",
+                    "coords": [
+                        1350.27,
+                        -91.64,
+                        500.73,
+                        14.44
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P6",
+                    "coords": [
+                        1364.73,
+                        -74.32,
+                        500.73,
+                        10.97
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P7",
+                    "coords": [
+                        1362.71,
+                        -88.8,
+                        500.73,
+                        10.97
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P8",
+                    "coords": [
+                        1364.22,
+                        -110.22,
+                        500.73,
+                        10.2
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P9",
+                    "coords": [
+                        1364.22,
+                        -110.22,
+                        380.72,
+                        10.2
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
                 }
             ],
-            "d_addr": 136
+            "d_addr": 136,
+            "search_points": []
         },
         "0X40089": {
             "name": "臂去缓存位",
@@ -260,38 +338,160 @@
                 {
                     "name": "Teach_P1",
                     "coords": [
-                        1307.71,
-                        -48.33,
-                        60.0,
-                        -31.36
+                        1364.22,
+                        -110.21,
+                        380.72,
+                        10.22
                     ],
                     "photo": 0,
-                    "config": "elbow_up"
+                    "config": "elbow_down"
                 },
                 {
                     "name": "Teach_P2",
                     "coords": [
-                        878.69,
-                        -87.81,
-                        60.0,
-                        -56.86
+                        1364.24,
+                        -110.11,
+                        593.69,
+                        10.22
                     ],
                     "photo": 0,
-                    "config": "elbow_up"
+                    "config": "elbow_down"
                 },
                 {
                     "name": "Teach_P3",
                     "coords": [
-                        889.14,
-                        -94.07,
-                        20.0,
-                        -56.86
+                        1339.01,
+                        126.84,
+                        593.69,
+                        -5.79
                     ],
                     "photo": 0,
-                    "config": "elbow_up"
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P4",
+                    "coords": [
+                        1284.5,
+                        265.32,
+                        593.69,
+                        -19.09
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P5",
+                    "coords": [
+                        1017.17,
+                        173.64,
+                        593.69,
+                        -0.43
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P6",
+                    "coords": [
+                        738.27,
+                        -28.54,
+                        593.69,
+                        29.58
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P7",
+                    "coords": [
+                        496.5,
+                        -406.17,
+                        593.69,
+                        78.76
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P8",
+                    "coords": [
+                        369.54,
+                        -638.54,
+                        593.69,
+                        99.55
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P9",
+                    "coords": [
+                        250.21,
+                        -813.46,
+                        593.69,
+                        108.41
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P10",
+                    "coords": [
+                        100.24,
+                        -1097.36,
+                        593.69,
+                        110.55
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P11",
+                    "coords": [
+                        33.69,
+                        -1220.57,
+                        593.69,
+                        110.58
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P12",
+                    "coords": [
+                        3.4,
+                        -1290.0,
+                        593.69,
+                        110.65
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P13",
+                    "coords": [
+                        -139.86,
+                        -1345.34,
+                        593.69,
+                        102.87
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P14",
+                    "coords": [
+                        -75.84,
+                        -1350.52,
+                        -125.88,
+                        102.55
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
                 }
             ],
-            "d_addr": 137
+            "d_addr": 137,
+            "search_points": []
         },
         "0X4008A": {
             "name": "臂去加工位吹气",
@@ -347,12 +547,36 @@
                 {
                     "name": "Teach_P1",
                     "coords": [
-                        -68.71,
-                        1348.27,
-                        10.85,
-                        -106.92
+                        -36.7,
+                        1212.33,
+                        10.34,
+                        -124.37
                     ],
-                    "photo": 1,
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ],
+            "search_points": [
+                {
+                    "name": "Teach_P1",
+                    "coords": [
+                        -258.29,
+                        1242.38,
+                        10.34,
+                        -127.5
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "P2",
+                    "coords": [
+                        -158.3,
+                        1241.04,
+                        10.34,
+                        -125.01
+                    ],
+                    "photo": 0,
                     "config": "elbow_up"
                 }
             ],
@@ -371,10 +595,10 @@
                 {
                     "name": "Teach_P1",
                     "coords": [
-                        922.52,
-                        71.54,
-                        20.0,
-                        -69.53
+                        -3.71,
+                        1314.8,
+                        -315.66,
+                        -109.43
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -382,10 +606,10 @@
                 {
                     "name": "Teach_P2",
                     "coords": [
-                        1326.11,
-                        17.47,
-                        20.0,
-                        -31.12
+                        -3.71,
+                        1314.8,
+                        655.7,
+                        -109.43
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -393,10 +617,10 @@
                 {
                     "name": "Teach_P3",
                     "coords": [
-                        1337.19,
-                        -0.02,
-                        0.0,
-                        -30.6
+                        41.0,
+                        1289.87,
+                        655.7,
+                        -90.76
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -404,10 +628,10 @@
                 {
                     "name": "Teach_P4",
                     "coords": [
-                        1334.93,
-                        3.82,
-                        10.0,
-                        -30.6
+                        176.12,
+                        1351.05,
+                        655.7,
+                        -69.33
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -415,16 +639,226 @@
                 {
                     "name": "Teach_P5",
                     "coords": [
-                        842.94,
-                        -51.48,
-                        20.0,
-                        -60.12
+                        379.25,
+                        1282.64,
+                        655.7,
+                        -41.18
                     ],
                     "photo": 0,
-                    "config": "elbow_up"
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P6",
+                    "coords": [
+                        460.0,
+                        1185.83,
+                        655.7,
+                        -29.96
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P7",
+                    "coords": [
+                        546.87,
+                        988.24,
+                        655.7,
+                        -16.85
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P8",
+                    "coords": [
+                        580.49,
+                        830.41,
+                        655.7,
+                        -0.87
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P9",
+                    "coords": [
+                        579.39,
+                        582.53,
+                        655.7,
+                        26.28
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P10",
+                    "coords": [
+                        609.64,
+                        432.56,
+                        655.7,
+                        43.29
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P11",
+                    "coords": [
+                        700.15,
+                        253.88,
+                        655.7,
+                        60.94
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P12",
+                    "coords": [
+                        738.62,
+                        107.1,
+                        655.7,
+                        70.36
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P13",
+                    "coords": [
+                        829.78,
+                        -49.23,
+                        655.7,
+                        76.4
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P14",
+                    "coords": [
+                        860.64,
+                        -96.53,
+                        655.7,
+                        76.39
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P15",
+                    "coords": [
+                        872.26,
+                        -171.63,
+                        655.7,
+                        76.99
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P16",
+                    "coords": [
+                        960.93,
+                        -196.78,
+                        655.7,
+                        67.58
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P17",
+                    "coords": [
+                        1048.2,
+                        -137.52,
+                        655.7,
+                        54.04
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P18",
+                    "coords": [
+                        1112.26,
+                        -129.49,
+                        655.7,
+                        48.1
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P19",
+                    "coords": [
+                        1184.84,
+                        -135.02,
+                        655.7,
+                        40.61
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P20",
+                    "coords": [
+                        1236.34,
+                        -138.71,
+                        655.7,
+                        33.99
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P21",
+                    "coords": [
+                        1271.75,
+                        -139.77,
+                        655.7,
+                        28.4
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P22",
+                    "coords": [
+                        1285.14,
+                        -141.3,
+                        655.7,
+                        26.72
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P23",
+                    "coords": [
+                        1366.65,
+                        -83.96,
+                        581.84,
+                        9.0
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P24",
+                    "coords": [
+                        1366.6,
+                        -84.24,
+                        391.29,
+                        9.0
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
                 }
             ],
-            "d_addr": 142
+            "d_addr": 142,
+            "search_points": []
         },
         "0X4008F": {
             "name": "臂去缓存拍照位检测",
@@ -433,16 +867,83 @@
                 {
                     "name": "Teach_P1",
                     "coords": [
-                        963.84,
-                        -17.94,
-                        20.0,
-                        -60.07
+                        1366.63,
+                        -84.06,
+                        391.29,
+                        8.99
                     ],
                     "photo": 0,
-                    "config": "elbow_up"
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P2",
+                    "coords": [
+                        1366.63,
+                        -84.06,
+                        500.73,
+                        8.99
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P3",
+                    "coords": [
+                        924.58,
+                        -184.35,
+                        500.73,
+                        48.97
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P4",
+                    "coords": [
+                        685.7,
+                        -119.4,
+                        500.73,
+                        61.36
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P5",
+                    "coords": [
+                        531.3,
+                        -66.03,
+                        500.73,
+                        83.19
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P6",
+                    "coords": [
+                        487.52,
+                        -51.07,
+                        500.73,
+                        84.86
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
+                },
+                {
+                    "name": "Teach_P7",
+                    "coords": [
+                        384.22,
+                        30.34,
+                        500.73,
+                        84.88
+                    ],
+                    "photo": 0,
+                    "config": "elbow_down"
                 }
             ],
-            "d_addr": 143
+            "d_addr": 143,
+            "search_points": []
         },
         "0X40090": {
             "name": "臂缓存位取料",

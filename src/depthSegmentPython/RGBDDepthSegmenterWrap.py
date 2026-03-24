@@ -67,7 +67,10 @@ class RGBDDetector:
         self.feed_roi_h = 480
         self.feed_min_length = 300 # 产品最小宽度（像素）
         self.feed_edge_index = 0
-    
+        self.feed_offset_x = 0
+        self.feed_offset_y = 0
+        self.feed_offset_z = 0
+
         # 2. 物料缓存台ROI + 深度范围
         self.material_roi_x = 0
         self.material_roi_y = 0
@@ -262,6 +265,9 @@ class RGBDDetector:
             self.feed_depth_max = cfg.get("feed_depth_max", 2000)
             self.feed_min_length = cfg.get("feed_min_length", 300)
             self.feed_edge_index = cfg.get("feed_edge_index", 0)
+            self.feed_offset_x = cfg.get("feed_offset_x", 0)
+            self.feed_offset_y = cfg.get("feed_offset_y", 0)
+            self.feed_offset_z = cfg.get("feed_offset_z", 0)
             
             # 2. 物料缓存台ROI + 深度范围
             self.material_roi_x = cfg.get("material_roi_x", 0)
@@ -1044,7 +1050,9 @@ class RGBDDetector:
             cv2.imshow("depth_normalized", depth_normalized) 
 
         # Canny边缘检测
-        edges = cv2.Canny(depth_normalized, 7, 20)
+        thresh1 = 7
+        thresh2 = 30
+        edges = cv2.Canny(depth_normalized, thresh1, thresh2)
         kernel = np.ones((5, 1), np.uint8)
         edges = cv2.dilate(edges, kernel, iterations=1)
         if debug == 1:
@@ -1142,6 +1150,7 @@ class RGBDDetector:
             # 计算几何中点
             mid_x = int((x1 + x2) / 2)
             mid_y = int((y1 + y2) / 2)
+            mid_x = roi_x_start + roi_w / 2 # x直接取图像中心
             edge_center_point = (mid_x, mid_y)
             
             # 提取直线上的像素点
@@ -1209,6 +1218,13 @@ class RGBDDetector:
 
                 # 世界坐标
                 world_xyz = self._pixel2world(edge_center_point, avg_depth)
+
+                # 抓取位置的偏移坐标
+                x, y, z = world_xyz
+                x += self.feed_offset_x
+                y += self.feed_offset_y
+                z += self.feed_offset_z
+                world_xyz = (x, y, z)
 
                 # 构造region（新增layer字段）
                 regions.append({

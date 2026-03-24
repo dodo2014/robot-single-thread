@@ -287,10 +287,9 @@ def compute_gripper_target_v2(
         raise e
 
 
-def move_forward(l1, l2, z0, nn3, xe, ye, ze, te, config_curr, j1_curr, j2_curr, distance):
+def move_forward(l1, l2, z0, nn3, xe, ye, ze, te, config_curr, distance):
     target_x, target_y, target_z, target_r = ScaraKinematics().calculate_forward_move(l1, l2, z0,
                                                                                       nn3, xe, ye, ze, te,
-                                                                                      j1_curr, j2_curr,
                                                                                       distance,
                                                                                       config_curr=config_curr)
     foward_point = {
@@ -390,23 +389,14 @@ def main():
 
     # xe, ye, ze, te = target_coords
     #
-    # ik_res = ScaraKinematics.inverse_kinematics_v2(
-    #     xe, ye, ze, 0,
-    #     robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
-    #     config_type=elbow_config  # 【关键】强制保持当前姿态
-    # )
-
-
-    # j1_new = ik_res['the1']
-    # j2_new = ik_res['the2']
     #
     # back_coords = move_forward(
     #     robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
-    #     xe, ye, ze, te, elbow_config, j1_new, j2_new, -50)
+    #     xe, ye, ze, te, elbow_config, -50)
     #
     # forward_coords = move_forward(
     #     robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
-    #     xe, ye, ze, te, elbow_config, j1_new, j2_new, 50)
+    #     xe, ye, ze, te, elbow_config, 50)
     #
     # print(f"back coords: {back_coords}")
     # print(f"forward coords: {forward_coords}")

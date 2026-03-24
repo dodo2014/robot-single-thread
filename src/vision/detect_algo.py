@@ -9,7 +9,7 @@ import traceback
 from pyorbbecsdk import (OBFormat)
 from src.vision.orbbec_camera import OrbbecCameraDevice
 from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
-from src.utils.path_helper import get_camera_img_dir
+from src.utils.path_helper import get_camera_img_dir, get_logs_dir
 from src.utils import logger
 from src.consts import const
 
@@ -123,8 +123,11 @@ class DetectAlgoService:
                     "ptype"：1， # 类型
                     "coords": [x,y,z,r], # 坐标参数
                     "ok": 1, # 检测结果，ok/1，ng/2
-                    "exists": 1 # 根据ptype类型判断，1：exists == 1 表示有料，ok； 2：exists == 1 表示有料OK， 2表示空料ng；
-                                3:exists == 2 表示无料；4:exists == 1 有铁屑，表示ng；
+                    "exists": 1 # 根据ptype类型判断
+                             1: exists == 1 表示有料，ok；
+                             2: exists == 1 表示有料OK， 2表示空料ng；
+                             3: exists == 2 表示空料；
+                             4: exists == 1 有铁屑，表示ng；
                 }
                 "err_msg": ""   # 异常日志，0返回空
             }
@@ -263,15 +266,16 @@ class DetectAlgoService:
         logger.info(f"Processing error: Max retries reached. {last_err}")
         return {"code": -1, "err_msg": f"Max retries reached. Last error: {last_err}"}
 
-    def execute_detection_midian_depth(self, ptype:int, number:int=15):
+    def execute_detection_midian_depth(self, ptype:int, number:int=21):
         """获取深度值的中位数返回值"""
         results = []
         for idx in range(number):
-            if idx < 7:
+            if idx < 7:  # 运动到点位之后立即拍照，图像深度不稳定，前7次只触发拍照，不处理
                 self.execute_detection(ptype, idx)
             else:
                 result = self.execute_detection(ptype, detect=1)
                 print(f"result is : {result}")
+
 
                 if result["code"] == 0:
                     results.append(result)
@@ -300,6 +304,13 @@ class DetectAlgoService:
             midian_result = sorted_result[int(len(sorted_result)/2)]
             midian_result["result"]["coords"][3] = r_average
             # midian_result["result"]["coords"][2] = z_average
+
+            print(int(len(sorted_result)/2))
+            print(get_logs_dir())
+            with open(f"{get_logs_dir()}/detect_algo.log", "a+") as f:
+                for item in sorted_result:
+                    f.write(f"{item}\n")
+                f.write(f"midian_result: {midian_result}\n")
 
 
             return midian_result
@@ -339,8 +350,8 @@ def main():
     try:
         # 上位机发起一次同步调用
         # ptype: 1 (物料识别)
-        # for i in range(200):
-            # time.sleep(0.2)
+        # for i in range(15):
+        #     time.sleep(2)
 
         start_time = round(time.time() * 1000)
         # response = service.execute_detection(ptype=2)
@@ -355,6 +366,8 @@ def main():
             print(f"Detection Failed: {response['err_msg']}")
         end_time = round(time.time() * 1000)
         print(f"Detection Time: {end_time - start_time}")
+        with open(f"{get_logs_dir()}/detect_algo.log", "a+") as f:
+            f.write(f"Detection Time: {end_time - start_time}\n")
 
     finally:
         service.shutdown()

@@ -62,12 +62,12 @@ J1_LIMIT_MAX = 98
 J1_LIMIT_MIN = -98
 
 # 机械臂 J2 活动范围
-J2_LIMIT_MAX = 113
-J2_LIMIT_MIN = -113
+J2_LIMIT_MAX = 150
+J2_LIMIT_MIN = -150
 
 # 机械臂J4活动范围
-J4_LIMIT_MAX = 120
-J4_LIMIT_MIN = -120
+J4_LIMIT_MAX = 133
+J4_LIMIT_MIN = -133
 
 # 设定精拍阈值 (mm)
 PRECISE_PHOTO_DISTANCE = 400.0
@@ -102,3 +102,10 @@ photo_type_normal = 1 # 普通拍照
 photo_type_loading = 2 # 上料
 photo_type_unloading = 3 # 下料
 photo_type_aluminum = 4  # 铝屑识别
+
+# 物料参数
+product_height = 147  # 单个产品的高度
+interval_height = 30  # 层与层之间间隔木条的高度（mm）
+base_depth = 400 # 首层标准深度
+product_cols_each_layer = 5 # 每层的物料数量
+product_total_layers = 7 # 物料的总层数
