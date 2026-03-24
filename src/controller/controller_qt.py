@@ -1436,15 +1436,38 @@ class Controller(QThread):
         :param loading: 上下料标记，1/上料，2/下料
         :param photo_type, 普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
         """
-        # 1. 确保有记忆索引属性 (可以在 __init__ 里加上 self.current_search_index = 0)
-        if not hasattr(self, 'current_search_index'):
-            self.current_search_index = 0
+        if self.check_estop(): return False
 
         if self.current_search_index >= len(search_points):
             logger.warning("搜寻索引已越界，自动重置为 0 (可能是新料架)")
             self.current_search_index = 0
 
-        # 2. 从记忆的位置开始搜寻
+        # ==========================================
+        # 1. 初始化扫描判定
+        # ==========================================
+        # 如果是新料车，或者刚开机，强制执行顶部扫描来纠正 index
+        if getattr(self, 'need_rack_mapping', True):
+            # 提取公共 config
+            config = search_points[0].get("config", "elbow_up") if search_points else "elbow_up"
+
+            target_idx = self.scan_rack_depth_mapping(process_addr, search_points, config, loading, photo_type)
+
+            if target_idx == -1:
+                # 料架全空或异常
+                self.plc.write_register(process_addr, 16)
+                return False
+
+            # 扫描成功，覆盖当前的搜寻索引
+            self.current_search_index = target_idx
+            self.runtime_state.save_search_index(target_idx)
+
+            # 关闭映射标志，后续的动作直接按照索引往下抓即可
+            self.need_rack_mapping = False
+
+        # ==========================================
+        # 2. 从确定的索引开始循环搜寻
+        # ==========================================
+
         for i in range(self.current_search_index, len(search_points)):
             if self.check_estop(): return False
 
@@ -1501,7 +1524,9 @@ class Controller(QThread):
         # ==========================================
         logger.critical("料架全空！请更换料车！")
         self.current_search_index = 0  # 自动复位，准备迎接新料车
+        self.runtime_state.reset_search_index()
 
+        self.need_rack_mapping = True  # 要求换料车后重新扫描
         # 告诉 PLC 缺料了 (你可以发 16，或者与电气约定一个新的缺料报警码，比如 17)
         self.plc.write_register(process_addr, 16)
 
