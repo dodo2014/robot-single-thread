@@ -1374,6 +1374,49 @@ class Controller(QThread):
 
         return target_index
 
+    def _wait_for_udp_response(self, sock, expected_msg="OK", timeout_sec=30.0):
+        """
+        带急停检测的 UDP 阻塞等待
+        :param sock: UDP Socket 对象
+        :param expected_msg: 期望收到的消息字符串
+        :param timeout_sec: 总体超时时间（秒）
+        :return: True(成功收到), False(超时、急停或异常)
+        """
+        # 设置底层 socket 超时时间为 0.5 秒，以保证能高频检查急停
+        sock.settimeout(0.5)
+        start_time = time.time()
+
+        while self.running:
+            # 1. 优先检查急停
+            if self.check_estop():
+                logger.warning("UDP 等待期间触发急停，终止等待")
+                return False
+
+            # 2. 检查总体超时
+            if time.time() - start_time > timeout_sec:
+                logger.error(f"等待 UDP 响应超时 (超过 {timeout_sec} 秒)")
+                return False
+
+            # 3. 尝试接收数据
+            try:
+                # 接收来自服务端的回复 (缓冲区 1024 字节足够了)
+                data, addr = sock.recvfrom(1024)
+                msg = data.decode('utf-8').strip()
+
+                if msg == expected_msg:
+                    return True
+                else:
+                    # 如果收到其他消息，可以忽略继续等，或者视为报错（看业务需求）
+                    logger.warning(f"收到非预期的 UDP 消息: {msg}，继续等待 '{expected_msg}'")
+
+            except socket.timeout:
+                # socket 0.5秒超时是正常的，直接 continue 进入下一轮循环，去检查急停
+                continue
+            except Exception as e:
+                logger.error(f"UDP 接收数据异常: {e}")
+                return False
+
+        return False
 
     def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None):
         """
@@ -1441,10 +1484,19 @@ class Controller(QThread):
                         udp_sock.sendto(msg.encode('utf-8'), (const.inspection_udp_ip, const.inspection_udp_port))
                         logger.info(f"发送 UDP (CCD): {msg}")
                         has_ccd_triggered = True
+
+                        # 阻塞等待 OK，超时时间设为 60 秒 (根据实际算法耗时调整)
+                        if self._wait_for_udp_response(udp_sock, expected_msg="OK", timeout_sec=60.0):
+                            logger.info(f"[{pos_name}] 收到 CCD 响应: OK")
+                            vision_ok = True
+                        else:
+                            logger.error(f"[{pos_name}] CCD 响应失败或超时")
+                            vision_ok = False
+
                     except Exception as e:
                         logger.error(f"发送 UDP (CCD) 失败: {e}")
+                        vision_ok = False
 
-                    vision_ok = True  # UDP 发送即完成，直接进入下一步
                 elif photo_trigger == 3:
                     # 激光测距触发逻辑
                     pos_name = end_point.get("name", "UnknownPos")
@@ -1457,11 +1509,17 @@ class Controller(QThread):
                         udp_sock.sendto(msg.encode('utf-8'), (const.inspection_udp_ip, const.inspection_udp_port))
                         logger.info(f"发送 UDP (Laser): {msg}")
                         has_laser_triggered = True
+
+                        # 阻塞等待 OK
+                        if self._wait_for_udp_response(udp_sock, expected_msg="OK", timeout_sec=30.0):
+                            logger.info(f"[{pos_name}] 收到 Laser 响应: OK")
+                            vision_ok = True
+                        else:
+                            logger.error(f"[{pos_name}] Laser 响应失败或超时")
+                            vision_ok = False
                     except Exception as e:
                         logger.error(f"发送 UDP (Laser) 失败: {e}")
-
-                    vision_ok = True  # UDP 发送即完成，直接进入下一步
-
+                        vision_ok = False  # UDP 发送即完成，直接进入下一步
 
                 # 3. 结果分支 (NG 处理)
                 if vision_ok:
@@ -1482,7 +1540,7 @@ class Controller(QThread):
                         return False
 
         # ========================================================
-        # 所有点位执行完成，发送结束信号
+        # 所有点位执行完成，发送UDP结束信号
         # ========================================================
         try:
             if has_ccd_triggered:
@@ -1492,6 +1550,7 @@ class Controller(QThread):
             if has_laser_triggered:
                 udp_sock.sendto(b"laser_finished", (const.inspection_udp_ip, const.inspection_udp_port))
                 logger.info("发送 UDP: laser_finished")
+
         except Exception as e:
             logger.error(f"发送 UDP 完成信号失败: {e}")
         finally:
