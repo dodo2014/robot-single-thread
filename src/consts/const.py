@@ -109,3 +109,16 @@ interval_height = 30  # 层与层之间间隔木条的高度（mm）
 base_depth = 400 # 首层标准深度
 product_cols_each_layer = 5 # 每层的物料数量
 product_total_layers = 7 # 物料的总层数
+
+# 上料架的状态地址，用于发送上料架状态数据
+ADDR_PRODUCT_LOADING_RACK = 0x400C8 # 200
+product_loading_rack_empty = 11 # 空料
+
+# 上料料加复位信号监听地址
+ADDR_PRODUCT_LOADING_RACK_RESET = 0x400CA  # 202
+product_loading_rack_reset = 10  # 复位信号，plc发出
+product_loading_rack_reset_ack = 13 # 上位机复位完成，上位机回复plc
+
+# 尺寸检测udp配置
+inspection_udp_ip = '127.0.0.1'
+inspection_udp_port = 5001

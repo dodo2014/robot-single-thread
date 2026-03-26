@@ -1,7 +1,7 @@
 from src.utils.logger import logger
 from src.plc.plc_client import PLCClient
 from src.utils.config_manager import ConfigManager, CONFIG_FILE, VISION_DATA_FILE
-from src.utils.runtime_state import RuntimeState
+from src.utils.loading_index import LoadingIndex
 from src.core.kinematics import ScaraKinematics
 from src.core.trajectory import TrajectoryV2
 from src.consts import const
@@ -14,6 +14,7 @@ import json
 import os
 import traceback
 import copy
+import socket
 
 
 class Controller(QThread):
@@ -46,8 +47,7 @@ class Controller(QThread):
         self.loop_count = 0
 
         # 上料拍照位置索引
-        self.runtime_state = RuntimeState()
-        self.current_search_index = self.runtime_state.current_search_index
+        self.loading_index = LoadingIndex()
 
         # 是否需要进行顶层深度扫描(开机默认为True)
         self.need_rack_mapping = True
@@ -251,6 +251,9 @@ class Controller(QThread):
         # 暂停检查
         self.check_and_handle_pause()
 
+        # 监听上料位复位信号
+        self.handle_loading_rack_reset()
+
         # === 正常业务流程 ===
         # 1. 批量读取状态寄存器
         start_addr = self.plc.map_modbus_address(const.process_start_addr)
@@ -258,6 +261,8 @@ class Controller(QThread):
             start_addr,
             const.process_num
         )
+
+        # 防止日志刷屏
         if self.loop_count % 50 == 0:logger.info(f"loop states: {states}")
         addr_value_map = {
             start_addr + idx: val
@@ -391,6 +396,23 @@ class Controller(QThread):
             logger.error(f"获取实时起点异常: {e}", exc_info=True)
             # 发生异常时，为了安全，回退到上一次记录的终点
             return self.last_motion_end_point
+
+    def handle_loading_rack_reset(self):
+        """监听上料料车复位信号，"""
+        try:
+            addr = self.plc.map_modbus_address(const.ADDR_PRODUCT_LOADING_RACK_RESET)
+            regs = self.plc.read_holding_registers(addr, 1)
+
+            if regs and regs[0] == const.product_loading_rack_reset:  # 收到 10
+                # 上料索引复位
+                self.loading_index.reset_search_index()
+
+                # 通知plc上位机已经复位完毕
+                self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset_ack)
+
+        except Exception as e:
+            logger.info(e)
+
 
     def _fill_zero_group(self, a1, a2, a3, a4, a5, a6):
         """辅助函数：将一组地址清零"""
@@ -1355,7 +1377,7 @@ class Controller(QThread):
 
     def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None):
         """
-        标准运动序列执行函数 (修改版)
+        标准运动序列执行函数
         :param process_addr:动作地址位
         :param points_sequence: 坐标点位
         :param loading: 上下料标记，1/上料，2/下料
@@ -1367,6 +1389,11 @@ class Controller(QThread):
             return False
 
         points_count = len(points_sequence)
+
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        has_ccd_triggered = False  # 记录本轮流程是否触发过 CCD
+        has_laser_triggered = False  # 记录本轮流程是否触发过 Laser
 
         for i in range(points_count - 1):
             start_point = points_sequence[i]
@@ -1398,13 +1425,43 @@ class Controller(QThread):
                     # 调用视觉逻辑
                     vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
                     if vision_res == "OK":
-                    # if self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type):
                         vision_ok = True
-                        # 注意：如果 handle_vision_recursive 成功，机械臂已经移动到了 p_r1
-                        # 此时 self.last_motion_end_point 已经是 p_r1 了
                     else:
                         # empty 或者 error
                         vision_ok = False
+                elif photo_trigger == 2:
+                    # CCD 相机触发逻辑
+                    pos_name = end_point.get("name", "UnknownPos")
+                    coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
+                    x, y, z = coords[0], coords[1], coords[2]
+
+                    # 组装字符串格式：ccd_pos_x_y_z (保留2位小数防数据过长)
+                    msg = f"ccd_{pos_name}_{x:.2f}_{y:.2f}_{z:.2f}"
+                    try:
+                        udp_sock.sendto(msg.encode('utf-8'), (const.inspection_udp_ip, const.inspection_udp_port))
+                        logger.info(f"发送 UDP (CCD): {msg}")
+                        has_ccd_triggered = True
+                    except Exception as e:
+                        logger.error(f"发送 UDP (CCD) 失败: {e}")
+
+                    vision_ok = True  # UDP 发送即完成，直接进入下一步
+                elif photo_trigger == 3:
+                    # 激光测距触发逻辑
+                    pos_name = end_point.get("name", "UnknownPos")
+                    coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
+                    x, y, z = coords[0], coords[1], coords[2]
+
+                    # 组装字符串格式：laser_pos_x_y_z
+                    msg = f"laser_{pos_name}_{x:.2f}_{y:.2f}_{z:.2f}"
+                    try:
+                        udp_sock.sendto(msg.encode('utf-8'), (const.inspection_udp_ip, const.inspection_udp_port))
+                        logger.info(f"发送 UDP (Laser): {msg}")
+                        has_laser_triggered = True
+                    except Exception as e:
+                        logger.error(f"发送 UDP (Laser) 失败: {e}")
+
+                    vision_ok = True  # UDP 发送即完成，直接进入下一步
+
 
                 # 3. 结果分支 (NG 处理)
                 if vision_ok:
@@ -1421,11 +1478,61 @@ class Controller(QThread):
                         # 也就是重新走到 end_point，然后重新触发拍照
                         continue
                     else:
+                        udp_sock.close()
                         return False
+
+        # ========================================================
+        # 所有点位执行完成，发送结束信号
+        # ========================================================
+        try:
+            if has_ccd_triggered:
+                udp_sock.sendto(b"ccd_finished", (const.inspection_udp_ip, const.inspection_udp_port))
+                logger.info("发送 UDP: ccd_finished")
+
+            if has_laser_triggered:
+                udp_sock.sendto(b"laser_finished", (const.inspection_udp_ip, const.inspection_udp_port))
+                logger.info("发送 UDP: laser_finished")
+        except Exception as e:
+            logger.error(f"发送 UDP 完成信号失败: {e}")
+        finally:
+            udp_sock.close()  # 释放 socket 资源
 
         # 序列全部完成，发送 13
         self.plc.write_register(process_addr, 13)
         return True
+
+    def _handle_empty_rack_and_wait(self, process_addr):
+        """
+        处理上料料架全空逻辑：
+        终止当前动作 -> 发送缺料报警 -> 阻塞死等人工换料 -> 回复复位ACK
+        """
+        logger.critical("料架全空！请更换料车！")
+
+        # 1. 内部状态重置
+        self.loading_index.reset_search_index()  # 自动复位，准备迎接新料车
+        self.need_rack_mapping = True  # 要求换料车后重新扫描
+
+        # 2. 终止当前业务动作
+        # 告诉 PLC 当前寻找动作完成 (这里你用了13，如果和PLC约定的没找到也发13就没问题；如果约定没找到发16，就改成16)
+        self.plc.write_register(process_addr, 13)
+
+        # 3. 通知 PLC 全局缺料
+        logger.info(f"发送料架空报警: {hex(const.ADDR_PRODUCT_LOADING_RACK)} -> {const.product_loading_rack_empty}")
+        self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK, const.product_loading_rack_empty)
+
+        # 4. 阻塞等待人工换料并复位
+        logger.info("系统挂起：等待工人更换料车并按下复位按钮...")
+
+        # 无限等待复位信号 (10)
+        if self.wait_for_plc_val(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset, timeout=-1):
+            logger.info("检测到新料车复位信号(10)，发送确认收到(13)...")
+            self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset_ack)
+
+            logger.info("工人已更换料车并复位，流程重新开始")
+            # 返回 False，退出当前调用栈，让主循环重新接收 PLC 的新指令
+            return False
+
+        return False
 
     def execute_search_motion_sequence(self, process_addr, search_points, loading=None, photo_type=None):
         """
@@ -1438,9 +1545,9 @@ class Controller(QThread):
         """
         if self.check_estop(): return False
 
-        if self.current_search_index >= len(search_points):
+        if self.loading_index.current_search_index >= len(search_points):
             logger.warning("搜寻索引已越界，自动重置为 0 (可能是新料架)")
-            self.current_search_index = 0
+            self.loading_index.reset_search_index()
 
         # ==========================================
         # 1. 初始化扫描判定
@@ -1449,18 +1556,14 @@ class Controller(QThread):
         if getattr(self, 'need_rack_mapping', True):
             # 提取公共 config
             config = search_points[0].get("config", "elbow_up") if search_points else "elbow_up"
-
             target_idx = self.scan_rack_depth_mapping(process_addr, search_points, config, loading, photo_type)
 
             if target_idx == -1:
-                # 料架全空或异常
-                self.plc.write_register(process_addr, 16)
-                return False
+                # 料架全空或异常，通知plc，plc执行动作(停止上料)
+                return self._handle_empty_rack_and_wait(process_addr)
 
             # 扫描成功，覆盖当前的搜寻索引
-            self.current_search_index = target_idx
-            self.runtime_state.save_search_index(target_idx)
-
+            self.loading_index.save_search_index(target_idx)
             # 关闭映射标志，后续的动作直接按照索引往下抓即可
             self.need_rack_mapping = False
 
@@ -1468,7 +1571,7 @@ class Controller(QThread):
         # 2. 从确定的索引开始循环搜寻
         # ==========================================
 
-        for i in range(self.current_search_index, len(search_points)):
+        for i in range(self.loading_index.current_search_index, len(search_points)):
             if self.check_estop(): return False
 
             target_point = search_points[i]
@@ -1476,10 +1579,10 @@ class Controller(QThread):
 
             # ==== 重试大循环 (应对相机故障) ====
             while self.running:
+                # 急停监听
                 if self.check_estop(): return False
 
                 # 1. 移动到拍照点
-
                 if not self._move_segment_to_target(process_addr=process_addr, target_point=target_point):
                     return False
 
@@ -1494,8 +1597,7 @@ class Controller(QThread):
                 if vision_res == "OK":
                     # 找到了！保存进度，下次还从这个视野开始找 (因为一个视野可能有两个料)
                     # 或者如果一个视野只抓一次，可以存 i + 1。这里假设存 i
-                    self.current_search_index = i
-                    self.runtime_state.save_search_index(i)
+                    self.loading_index.save_search_index(i)
                     self.last_motion_end_point = target_point
 
                     logger.info(f"物料已找到并保存！当前搜寻索引保留在: {i}")
@@ -1522,21 +1624,8 @@ class Controller(QThread):
         # ==========================================
         # 如果 for 循环正常结束，说明所有点都拍完了，全是 "EMPTY"
         # ==========================================
-        logger.critical("料架全空！请更换料车！")
-        self.current_search_index = 0  # 自动复位，准备迎接新料车
-        self.runtime_state.reset_search_index()
+        return self._handle_empty_rack_and_wait(process_addr)
 
-        self.need_rack_mapping = True  # 要求换料车后重新扫描
-        # 告诉 PLC 缺料了 (你可以发 16，或者与电气约定一个新的缺料报警码，比如 17)
-        self.plc.write_register(process_addr, 16)
-
-        # 此时程序可能需要进入等待状态，等待工人换完料车按复位
-        if self.wait_for_plc_val(process_addr, 20, timeout=7200):
-            logger.info("工人已更换料车并复位，流程重新开始")
-            # 可以在这里做个递归调用重新扫，或者直接 return False 让 PLC 重新发起请求
-            return False
-
-        return False
 
     def execute_standard_motion_sequence_history_1(self, process_addr, points_sequence):
         """
@@ -2420,7 +2509,6 @@ class Controller(QThread):
             return
 
         points.extend(process_points)
-        points_count = len(points)
 
         logger.info(f"point list: {points}")
 

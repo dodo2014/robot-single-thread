@@ -3,8 +3,8 @@ import json
 from src.utils.logger import logger
 from src.utils.path_helper import get_base_path
 
-
-class RuntimeState:
+"""上料位置索引"""
+class LoadingIndex:
     def __init__(self):
         # 状态文件路径
         self.state_file = os.path.join(get_base_path(), "runtime_state.json")
@@ -51,6 +51,6 @@ class RuntimeState:
         self.save_search_index(0)
 
 if __name__ == "__main__":
-    rs = RuntimeState()
-    idx = rs.load_search_index()
+    lidx = LoadingIndex()
+    idx = lidx.load_search_index()
     print(idx)

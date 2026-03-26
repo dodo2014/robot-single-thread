@@ -510,8 +510,12 @@ class ConfigEditorUI(QMainWindow):
             for j in range(4):
                 val = f"{coords[j]:.2f}"
                 table.setItem(i, j + 1, QTableWidgetItem(val))
-            table.setItem(i, 5, QTableWidgetItem(str(pt.get('photo', 0))))
 
+            # 设置photo下拉框
+            photo_val = pt.get('photo', 0)
+            self._set_row_photo_combo(table, i, current_val=photo_val)
+
+            # 设置 姿态 下拉框
             current_config = pt.get('config', 'elbow_up')
             self._set_row_elbow_combo(table, i, current_val=current_config)
 
@@ -527,8 +531,12 @@ class ConfigEditorUI(QMainWindow):
             y = float(table.item(i, 2).text())
             z = float(table.item(i, 3).text())
             r = float(table.item(i, 4).text())
-            photo = int(table.item(i, 5).text())
 
+            # 读取 Photo 下拉框的值
+            combo_photo = table.cellWidget(i, 5)
+            photo = combo_photo.currentIndex() if combo_photo else 0
+
+            # 读取 姿态 下拉框的值
             combo = table.cellWidget(i, 6)
             config_val = combo.currentText() if combo else "elbow_up"
 
@@ -554,22 +562,53 @@ class ConfigEditorUI(QMainWindow):
 
         table.setCellWidget(row, 6, combo_config)
 
+    def _set_row_photo_combo(self, table, row, current_val=0):
+        """辅助函数：给指定行设置拍照动作下拉框"""
+        combo_photo = QComboBox()
+        # 注意：这里的选项顺序非常重要，它们的 index 刚好对应 0, 1, 2, 3
+        combo_photo.addItems(["无", "深度", "CCD", "激光"])
+
+        # 确保传入的值在安全范围内 (0~3)
+        try:
+            current_val = int(current_val)
+            if 0 <= current_val <= 3:
+                combo_photo.setCurrentIndex(current_val)
+            else:
+                combo_photo.setCurrentIndex(0)
+        except (ValueError, TypeError):
+            combo_photo.setCurrentIndex(0)
+
+        table.setCellWidget(row, 5, combo_photo)
+
+
     def swap_table_rows(self, table, row1, row2):
         """核心逻辑：交换两行的数据"""
-        for col in range(6):
+        # 交换普通单元格 (0-4列: Name, X, Y, Z, R)
+        for col in range(5):
             item1 = table.takeItem(row1, col)
             item2 = table.takeItem(row2, col)
             table.setItem(row2, col, item1)
             table.setItem(row1, col, item2)
 
-        combo1 = table.cellWidget(row1, 6)
-        combo2 = table.cellWidget(row2, 6)
+        # 交换 Photo 下拉框 (第5列)
+        combo_photo1 = table.cellWidget(row1, 5)
+        combo_photo2 = table.cellWidget(row2, 5)
 
-        val1 = combo1.currentText() if combo1 else "elbow_up"
-        val2 = combo2.currentText() if combo2 else "elbow_up"
+        val_photo1 = combo_photo1.currentIndex() if combo_photo1 else 0
+        val_photo2 = combo_photo2.currentIndex() if combo_photo2 else 0
 
-        self._set_row_elbow_combo(table, row2, val1)
-        self._set_row_elbow_combo(table, row1, val2)
+        self._set_row_photo_combo(table, row2, current_val=val_photo1)
+        self._set_row_photo_combo(table, row1, current_val=val_photo2)
+
+        # 交换 Config/Elbow 下拉框 (第6列)
+        combo_config1 = table.cellWidget(row1, 6)
+        combo_config2 = table.cellWidget(row2, 6)
+
+        val_config1 = combo_config1.currentText() if combo_config1 else "elbow_up"
+        val_config2 = combo_config2.currentText() if combo_config2 else "elbow_up"
+
+        self._set_row_elbow_combo(table, row2, current_val=val_config1)
+        self._set_row_elbow_combo(table, row1, current_val=val_config2)
 
     def move_point_up(self):
         """上移当前行"""
@@ -960,9 +999,10 @@ class ConfigEditorUI(QMainWindow):
             active_table.setItem(insert_idx, 2, QTableWidgetItem(f"{y:.2f}"))
             active_table.setItem(insert_idx, 3, QTableWidgetItem(f"{z:.2f}"))
             active_table.setItem(insert_idx, 4, QTableWidgetItem(f"{r:.2f}"))
-            active_table.setItem(insert_idx, 5, QTableWidgetItem("0"))
-
+            # active_table.setItem(insert_idx, 5, QTableWidgetItem("0"))
+            self._set_row_photo_combo(active_table, insert_idx, current_val=0)
             self._set_row_elbow_combo(active_table, insert_idx, current_val=current_elbow)
+
             active_table.setCurrentCell(insert_idx, 0)
 
         except Exception as e:
@@ -1006,10 +1046,15 @@ class ConfigEditorUI(QMainWindow):
 
         active_table.insertRow(insert_idx)
         active_table.setItem(insert_idx, 0, QTableWidgetItem(f"P{insert_idx + 1}"))
-        for j in range(1, 6):
+
+        # 循环添加x, y, z, r
+        for j in range(1, 5):
             active_table.setItem(insert_idx, j, QTableWidgetItem("0"))
 
+        # 初始化 Photo 和 Config 两个下拉框
+        self._set_row_photo_combo(active_table, insert_idx, current_val=0)  # 默认 0 (无)
         self._set_row_elbow_combo(active_table, insert_idx)
+
         active_table.setCurrentCell(insert_idx, 0)
 
     def delete_point_row(self):
