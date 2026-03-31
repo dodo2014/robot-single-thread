@@ -106,7 +106,7 @@ photo_type_aluminum = 4  # 铝屑识别
 # 物料参数
 product_height = 147  # 单个产品的高度
 interval_height = 30  # 层与层之间间隔木条的高度（mm）
-base_depth = 400 # 首层标准深度
+base_depth = 400 # 首层标准深度，最上层拍照位，深度相机与物料的距离
 product_cols_each_layer = 5 # 每层的物料数量
 product_total_layers = 7 # 物料的总层数
 
@@ -121,4 +121,5 @@ product_loading_rack_reset_ack = 13 # 上位机复位完成，上位机回复plc
 
 # 尺寸检测udp配置
 inspection_udp_ip = '127.0.0.1'
-inspection_udp_port = 5001
+inspection_udp_port = 8501
+inspection_udp_local_port = 8500

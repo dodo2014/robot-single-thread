@@ -2,6 +2,7 @@ from src.utils.logger import logger
 from src.plc.plc_client import PLCClient
 from src.utils.config_manager import ConfigManager, CONFIG_FILE, VISION_DATA_FILE
 from src.utils.loading_index import LoadingIndex
+from src.utils.udp_client import UdpClient
 from src.core.kinematics import ScaraKinematics
 from src.core.trajectory import TrajectoryV2
 from src.consts import const
@@ -975,6 +976,8 @@ class Controller(QThread):
         # 判断是否需要插值：
         # 需要插值，先插值，再发送坐标
         # 不需要插值，直接发送坐标
+        target_name = target_point.get("name", "Temp_Point")
+
         if interpolate:
             # 2. 生成插值路径
             interpolated_path = TrajectoryV2().generate_cartesian_interpolated_path(
@@ -983,7 +986,6 @@ class Controller(QThread):
             )
             points_to_send = interpolated_path[1:]  # 去掉起点
 
-            target_name = target_point.get("name", "Temp_Point")
             logger.info(f"执行移动片段 -> {target_name}")
 
             # 3. 发送数据
@@ -1418,13 +1420,14 @@ class Controller(QThread):
 
         return False
 
-    def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None):
+    def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None, send_done=True):
         """
         标准运动序列执行函数
         :param process_addr:动作地址位
         :param points_sequence: 坐标点位
         :param loading: 上下料标记，1/上料，2/下料
-        :param photo_type, 普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
+        :param photo_type: 普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
+        :param send_done: 执行完毕后是否向 PLC 发送 13 完成信号。默认为 True。
         """
         # 1. 检查急停
         if self.check_estop():
@@ -1433,132 +1436,140 @@ class Controller(QThread):
 
         points_count = len(points_sequence)
 
-        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_client = UdpClient(
+            local_port=const.inspection_udp_local_port,
+            remote_ip=const.inspection_udp_ip,
+            remote_port=const.inspection_udp_port
+        )
 
         has_ccd_triggered = False  # 记录本轮流程是否触发过 CCD
         has_laser_triggered = False  # 记录本轮流程是否触发过 Laser
 
-        for i in range(points_count - 1):
-            start_point = points_sequence[i]
-            end_point = points_sequence[i + 1]
+        try:
+            for i in range(points_count - 1):
+                start_point = points_sequence[i]
+                end_point = points_sequence[i + 1]
 
-            # 获取 photo 标志 (0 或 1)
-            photo_trigger = end_point.get("photo", 0)
+                # 获取 photo 标志 (0 或 1)
+                photo_trigger = end_point.get("photo", 0)
 
-            # === while 重试循环 (处理 NG -> 16 -> 20 -> 重试) ===
-            while self.running:
-                # 1. 检查急停
-                if self.check_estop():
-                    logger.critical("流程强制终止：急停触发")
-                    self.last_motion_end_point = None  # 清除记忆点，强制下次重新获取实时位置
-                    return False  # 直接退出函数，即清除了当前流程数据
+                # === while 重试循环 (处理 NG -> 16 -> 20 -> 重试) ===
+                while self.running:
+                    # 1. 检查急停
+                    if self.check_estop():
+                        logger.critical("流程强制终止：急停触发")
+                        self.last_motion_end_point = None  # 清除记忆点，强制下次重新获取实时位置
+                        return False  # 直接退出函数，即清除了当前流程数据
 
-                # 1. 执行移动 (使用提取出的通用函数)
-                # 这会处理插值、发送、等待12
-                if not self._move_segment_to_target(process_addr=process_addr, start_point=start_point,
-                                                    target_point=end_point):
-                    target_name = end_point.get("name", "Temp_Point")
-                    logger.error(f"移动到 {target_name} 失败，流程异常终止")
-                    return False  # 移动失败(如急停)，直接退出
+                    # 1. 执行移动 (使用提取出的通用函数)
+                    # 这会处理插值、发送、等待12
+                    if not self._move_segment_to_target(process_addr=process_addr, start_point=start_point,
+                                                        target_point=end_point):
+                        target_name = end_point.get("name", "Temp_Point")
+                        logger.error(f"移动到 {target_name} 失败，流程异常终止")
+                        return False  # 移动失败(如急停)，直接退出
 
-                # 2. 拍照逻辑处理
-                vision_ok = True
+                    # 2. 拍照逻辑处理
+                    vision_ok = True
 
-                if photo_trigger == 1:
-                    # 调用视觉逻辑
-                    vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
-                    if vision_res == "OK":
-                        vision_ok = True
-                    else:
-                        # empty 或者 error
-                        vision_ok = False
-                elif photo_trigger == 2:
-                    # CCD 相机触发逻辑
-                    pos_name = end_point.get("name", "UnknownPos")
-                    coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
-                    x, y, z = coords[0], coords[1], coords[2]
+                    if photo_trigger == 1:
+                        # 调用视觉逻辑
+                        vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
+                        if vision_res == "OK":
+                            vision_ok = True
+                        else:
+                            # empty 或者 error
+                            vision_ok = False
+                    elif photo_trigger == 2:
+                        # CCD 相机触发逻辑
+                        pos_name = end_point.get("name", "UnknownPos")
+                        coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
+                        x, y, z = coords[0], coords[1], coords[2]
 
-                    # 组装字符串格式：ccd_pos_x_y_z (保留2位小数防数据过长)
-                    msg = f"ccd_{pos_name}_{x:.2f}_{y:.2f}_{z:.2f}"
-                    try:
-                        udp_sock.sendto(msg.encode('utf-8'), (const.inspection_udp_ip, const.inspection_udp_port))
+                        # 组装字符串格式：ccd_pos_x_y_z (保留2位小数防数据过长)
+                        msg = f"ccd_{pos_name}_{x:.2f}_{y:.2f}_{z:.2f}"
+                        udp_client.send_msg(msg)
                         logger.info(f"发送 UDP (CCD): {msg}")
                         has_ccd_triggered = True
 
                         # 阻塞等待 OK，超时时间设为 60 秒 (根据实际算法耗时调整)
-                        if self._wait_for_udp_response(udp_sock, expected_msg="OK", timeout_sec=60.0):
+                        # 调用封装的等待方法，把 controller 的急停检测方法当做参数传进去
+                        if udp_client.wait_for_response(
+                                expected_msg="OK",
+                                timeout_sec=60.0,
+                                check_estop_func=self.check_estop,  # 注入急停检测回调
+                                is_running_func=lambda: self.running  # 注入线程状态回调
+                        ):
                             logger.info(f"[{pos_name}] 收到 CCD 响应: OK")
                             vision_ok = True
                         else:
                             logger.error(f"[{pos_name}] CCD 响应失败或超时")
                             vision_ok = False
 
-                    except Exception as e:
-                        logger.error(f"发送 UDP (CCD) 失败: {e}")
-                        vision_ok = False
+                    elif photo_trigger == 3:
+                        # 激光测距触发逻辑
+                        pos_name = end_point.get("name", "UnknownPos")
+                        coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
+                        x, y, z = coords[0], coords[1], coords[2]
 
-                elif photo_trigger == 3:
-                    # 激光测距触发逻辑
-                    pos_name = end_point.get("name", "UnknownPos")
-                    coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
-                    x, y, z = coords[0], coords[1], coords[2]
-
-                    # 组装字符串格式：laser_pos_x_y_z
-                    msg = f"laser_{pos_name}_{x:.2f}_{y:.2f}_{z:.2f}"
-                    try:
-                        udp_sock.sendto(msg.encode('utf-8'), (const.inspection_udp_ip, const.inspection_udp_port))
+                        # 组装字符串格式：laser_pos_x_y_z
+                        msg = f"laser_{pos_name}_{x:.2f}_{y:.2f}_{z:.2f}"
+                        udp_client.send_msg(msg)
                         logger.info(f"发送 UDP (Laser): {msg}")
                         has_laser_triggered = True
 
-                        # 阻塞等待 OK
-                        if self._wait_for_udp_response(udp_sock, expected_msg="OK", timeout_sec=30.0):
+                        if udp_client.wait_for_response(
+                                expected_msg="OK",
+                                timeout_sec=30.0,
+                                check_estop_func=self.check_estop,
+                                is_running_func=lambda: self.running
+                        ):
                             logger.info(f"[{pos_name}] 收到 Laser 响应: OK")
                             vision_ok = True
                         else:
                             logger.error(f"[{pos_name}] Laser 响应失败或超时")
                             vision_ok = False
-                    except Exception as e:
-                        logger.error(f"发送 UDP (Laser) 失败: {e}")
-                        vision_ok = False  # UDP 发送即完成，直接进入下一步
 
-                # 3. 结果分支 (NG 处理)
-                if vision_ok:
-                    break  # 成功，退出 while，进入下一个 for (如果有的话)
-                else:
-                    # 发送 NG 信号
-                    self.plc.write_register(process_addr, 16)
-                    logger.warning("视觉/流程 NG (16)，等待复位 (20)...")
-
-                    # 等待 PLC 复位信号
-                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
-                        logger.info("收到 20，重试当前步骤")
-                        # 这里的 continue 会导致重新执行 _move_segment_to_target
-                        # 也就是重新走到 end_point，然后重新触发拍照
-                        continue
+                    # 3. 结果分支 (NG 处理)
+                    if vision_ok:
+                        break  # 成功，退出 while，进入下一个 for (如果有的话)
                     else:
-                        udp_sock.close()
-                        return False
+                        # 发送 NG 信号
+                        self.plc.write_register(process_addr, 16)
+                        logger.warning("视觉/流程 NG (16)，等待复位 (20)...")
 
-        # ========================================================
-        # 所有点位执行完成，发送UDP结束信号
-        # ========================================================
-        try:
+                        # 等待 PLC 复位信号
+                        if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                            logger.info("收到 20，重试当前步骤")
+                            # 这里的 continue 会导致重新执行 _move_segment_to_target
+                            # 也就是重新走到 end_point，然后重新触发拍照
+                            continue
+                        else:
+                            return False
+
+            # ========================================================
+            # 所有点位执行完成，发送UDP结束信号
+            # ========================================================
             if has_ccd_triggered:
-                udp_sock.sendto(b"ccd_finished", (const.inspection_udp_ip, const.inspection_udp_port))
+                udp_client.send_msg("ccd_finished")
                 logger.info("发送 UDP: ccd_finished")
 
             if has_laser_triggered:
-                udp_sock.sendto(b"laser_finished", (const.inspection_udp_ip, const.inspection_udp_port))
+                udp_client.send_msg("laser_finished")
                 logger.info("发送 UDP: laser_finished")
 
-        except Exception as e:
-            logger.error(f"发送 UDP 完成信号失败: {e}")
-        finally:
-            udp_sock.close()  # 释放 socket 资源
+            # 序列全部完成，发送 13
+            if send_done:
+                logger.info(f"标准序列全部完成，发送 13 结束信号")
+                self.plc.write_register(process_addr, 13)
+            else:
+                logger.info(f"标准序列完成，等待后续拼接动作 (暂不发 13)")
 
-        # 序列全部完成，发送 13
-        self.plc.write_register(process_addr, 13)
-        return True
+            return True
+
+        finally:
+            # 强制释放，保证端口绝对不会被占用。
+            udp_client.close()
 
     def _handle_empty_rack_and_wait(self, process_addr):
         """
@@ -1640,6 +1651,41 @@ class Controller(QThread):
             while self.running:
                 # 急停监听
                 if self.check_estop(): return False
+
+                # ========================================================
+                # 姿态切换检测与【多点安全过渡】逻辑
+                # ========================================================
+                realtime_pt = self.get_realtime_point()
+                curr_config = realtime_pt.get("config", "elbow_up") if realtime_pt else "elbow_up"
+                target_config = target_point.get("config", "elbow_up")
+                # 如果检测到接下来的目标点需要翻肘
+                if curr_config != target_config:
+                    logger.warning(f"检测到机械臂姿态即将切换 ({curr_config} -> {target_config})")
+                    # 读取配置中的多点安全过渡序列
+                    flip_via_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get(
+                        "flip_via_points",[])
+
+                    if flip_via_points:
+                        logger.info(f"开始执行姿态切换安全过渡序列 (共 {len(flip_via_points)} 个点)...")
+
+                        # # 当前实时位置作为序列的第0个点，保证轨迹连续
+                        # full_flip_sequence = [realtime_pt] + flip_via_points
+                        # flip_success  = self.execute_standard_motion_sequence(
+                        #     process_addr,
+                        #     full_flip_sequence,
+                        #     send_done=False)
+                        #
+                        # if not flip_success:
+                        #     logger.error("姿态安全过渡执行失败（可能由于急停或不可达），终止当前动作")
+                        #     return False
+
+                        # for 循环直接调用 _move_segment_to_target(..., interpolate=False)
+                        for fp in flip_via_points:
+                            if not self._move_segment_to_target(process_addr, target_point=fp, interpolate=False):
+                                return False
+
+                        logger.info("姿态安全过渡执行完毕，准备前往最终目标点")
+
 
                 # 1. 移动到拍照点
                 if not self._move_segment_to_target(process_addr=process_addr, target_point=target_point):
@@ -1798,59 +1844,8 @@ class Controller(QThread):
         points = [process_start_point, origin_point]
         logger.info(f"handle_process_0x400A7, points: {points}")
 
-        # 4 循环发送坐标，改用execute_standard_motion_sequence，原先的代码注释掉
+        # 4 循环发送坐标
         self.execute_standard_motion_sequence(process_addr, points)
-
-        """"
-        points_count = len(points)
-        for i in range(points_count-1):
-            start_point = points[i]
-            end_point = points[i+1]
-
-            # 生成9个点：[Start, I1...I7, End]
-            # num_inserts=7 意味着中间插入7个，总共生成 2+7=9 个点
-            interpolated_path  = TrajectoryV2().generate_cartesian_interpolated_path(
-                [start_point, end_point],
-                num_inserts=const.point_interpolated_num
-            )
-
-            # 切片去掉Start，保留 [I1...I7, End]，共8个点
-            points_to_send = interpolated_path[1:]
-            logger.info(f"handle_process_0x400A7, points_to_send: {points_to_send}")
-
-
-            # 获取终点的拍照标志
-            photo_trigger = end_point.get("photo", 0)
-            target_name = end_point.get("name", f"P{i+1}")
-
-            while self.running:
-                # logger.info(f"开始执行第 {i + 1}/{points_count} 个点位: {end_point}")
-                logger.info(f"--- 执行段 {i + 1}/{points_count - 1}: {start_point.get('name')} -> {target_name} ---")
-
-                # 1. 发送坐标
-                # send_res = self.send_coords_once(process_addr, point)
-                send_res = self.send_coords_batch(process_addr, points_to_send, 8)
-                if not send_res:
-                    logger.error("坐标发送失败，终止流程")
-                    return  # 或者根据需求处理
-
-                # 2. 写入 11 (坐标已发送)
-                self.plc.write_register(process_addr, 11)
-                logger.info(f"坐标发送成功，发送响应11")
-
-                # 3. 等待 PLC 到位 (等待 12)
-                # 这里的超时时间是机械臂运动时间，需合理设置
-                if not self.wait_for_plc_val(process_addr, 12, timeout=-1):
-                    logger.error("等待机械臂到位超时")
-                    return
-                logger.info(f"段 {target_name} 到位, plc回复 12)")
-
-                break
-        # ============================================
-        # === 所有点位循环结束 ===/
-        logger.info("所有点位执行完毕，发送完成信号 13")
-        self.plc.write_register(process_addr, 13)
-        """
 
         # 动作全部成功完成后，更新全局记录
         # 将当前动作的最后一个点，标记为下一次动作的起点
@@ -1894,94 +1889,6 @@ class Controller(QThread):
         logger.info(f"point list: {points}")
 
         self.execute_standard_motion_sequence(process_addr, points, photo_type=const.photo_type_normal)
-
-        """
-        points_count = len(points)
-
-        for i in range(points_count-1): # 循环发送坐标
-            start_point = points[i]
-            end_point = points[i+1]
-
-            # 生成9个点：[Start, I1...I7, End]
-            # num_inserts=7 意味着中间插入7个，总共生成 2+7=9 个点
-            interpolated_path  = TrajectoryV2().generate_cartesian_interpolated_path(
-                [start_point, end_point],
-                num_inserts=const.point_interpolated_num
-            )
-
-            # 切片去掉Start，保留 [I1...I7, End]，共8个点
-            points_to_send = interpolated_path[1:]
-
-            # # 获取终点的拍照标志
-            photo_trigger = end_point.get("photo", 0)
-            target_name = end_point.get("name", f"P{i+1}")
-
-            while self.running:
-                # logger.info(f"开始执行第 {i + 1}/{points_count} 个点位: {end_point}")
-                logger.info(f"--- 执行段 {i + 1}/{points_count - 1}: {start_point.get('name')} -> {target_name} ---")
-
-                # 1. 发送坐标
-                # send_res = self.send_coords_once(process_addr, point)
-                send_res = self.send_coords_batch(process_addr, points_to_send, 8)
-                if not send_res:
-                    logger.error("坐标发送失败，终止流程")
-                    return  # 或者根据需求处理
-
-                # 2. 写入 11 (坐标已发送)
-                self.plc.write_register(process_addr, 11)
-                logger.info(f"坐标发送成功，发送响应11")
-
-                # 3. 等待 PLC 到位 (等待 12)
-                # 这里的超时时间是机械臂运动时间，需合理设置
-                if not self.wait_for_plc_val(process_addr, 12, timeout=-1):
-                    logger.error("等待机械臂到位超时")
-                    return
-                logger.info(f"段 {target_name} 到位, plc回复 12)")
-
-                # 4. 拍照逻辑 (如果有配置)
-                vision_ok = True
-                if photo_trigger == 1:
-                    logger.info("触发拍照...")
-                    photo_res = self.take_photo()  # 返回 "OK" 或 "NG"
-
-                    if photo_res == "OK":
-                        logger.info("拍照结果: OK")
-                        # 拍照成功，发送 15 (根据协议，可能需要告知PLC拍照OK)
-                        # 注意：如果不是最后一步，发送15可能会覆盖状态，需确认协议细节。
-                        # 通常做法：NG才报错，OK则继续。这里假设OK需要发15确认。 暂时注释掉
-                        # self.plc.write_register(process_addr, 15)
-                        vision_ok = True
-                    else:
-                        logger.error("拍照结果: NG")
-                        vision_ok = False
-
-                # === 5. 结果判断与分支 ===
-                if vision_ok:
-                    # --- 成功路径 ---
-                    # 跳出 while 重试循环，继续 for 循环执行下一个点
-                    break
-                else:
-                    # --- 失败路径 (NG) ---
-                    # 1. 发送 16 给 PLC
-                    self.plc.write_register(process_addr, 16)
-                    logger.warning("已发送 16，等待人工复位 (等待 20)...")
-
-                    # 2. 【关键】死循环等待 20
-                    # 这里 timeout 设为 -1 (无限等待)，直到操作员按下复位
-                    if self.wait_for_plc_val(process_addr, 20, timeout=-1):
-                        logger.info("收到复位信号 20，准备重新执行当前点位")
-                        # 3. 收到 20 后，不 break for循环，而是 continue while 循环
-                        # 这会导致重新执行 send_coords_once -> write 11 -> wait 12 -> photo
-                        continue
-                    else:
-                        # 如果程序停止运行
-                        return
-
-
-        # === 所有点位循环结束 ===
-        logger.info("所有点位执行完毕，发送完成信号 13")
-        self.plc.write_register(process_addr, 13)
-        """
 
         # ============================================
         # 动作全部成功完成后，更新全局记录
@@ -2341,14 +2248,24 @@ class Controller(QThread):
         points = [process_start_point]
         logger.info(f"process address: {process_addr} : {process_start_point['name']}")
         process_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("points", [])
-        if not points:
+        if not process_points:
             logger.error("未找到点位配置")
             return
 
         points.extend(process_points)
         # 执行运动控制
         # logger.info(f"---> 阶段 1: 优先前往安全固定点: {process_points} <---")
-        # ps_success = self.execute_standard_motion_sequence(process_addr, points, loading=1, photo_type=const.photo_type_loading)
+        ps_success = self.execute_standard_motion_sequence(
+            process_addr,
+            points,
+            loading=1,
+            photo_type=const.photo_type_loading,
+            send_done=False  # 执行完成之后不发送13
+        )
+
+        if not ps_success:
+            logger.error(f"动作 {hex(process_addr)} 阶段 1 (安全过渡) 失败，终止流程。")
+            return
 
         # =========================================================
         # 2. 接着执行阵列搜寻逻辑

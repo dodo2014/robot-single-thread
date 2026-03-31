@@ -565,7 +565,7 @@
                         10.34,
                         -127.5
                     ],
-                    "photo": 0,
+                    "photo": 1,
                     "config": "elbow_up"
                 },
                 {
@@ -576,11 +576,12 @@
                         10.34,
                         -125.01
                     ],
-                    "photo": 0,
+                    "photo": 1,
                     "config": "elbow_up"
                 }
             ],
-            "d_addr": 140
+            "d_addr": 140,
+            "flip_via_points": []
         },
         "0X4008D": {
             "name": "臂去上料位取料",

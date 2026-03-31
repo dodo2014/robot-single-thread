@@ -938,7 +938,7 @@ class RGBDDetector:
     # ==============================================================
     # ✅ ✅ ✅ 【直线检测算法完整版】支持多层产品分拣
     # ==============================================================
-    def _depth_segment_find_horizontal_line(self, depth_img):
+    def _depth_segment_find_horizontal_line(self, depth_img, rgb_img):
         regions = []
         h, w = depth_img.shape
         
@@ -1024,13 +1024,13 @@ class RGBDDetector:
                 current_layer = int(distance_from_tray // layer_thickness)
                 
                 # 计算当前层的深度范围
-                layer_top_depth = tray_depth - (current_layer + 1) * layer_thickness     # 上边界（浅）
-                layer_bottom_depth = tray_depth - (current_layer + 0) * layer_thickness  # 下边界（深）
-                layer_top_depth = target_depth
-                layer_bottom_depth = target_depth + layer_thickness
+                # layer_top_depth = tray_depth - (current_layer + 1) * layer_thickness     # 上边界（浅）
+                # layer_bottom_depth = tray_depth - (current_layer + 0) * layer_thickness  # 下边界（深）
+                layer_top_depth = target_depth - layer_thickness/2
+                layer_bottom_depth = target_depth + layer_thickness/2
 
                 # 增加容差
-                depth_tolerance = 30
+                depth_tolerance = 0
                 current_depth_min = layer_top_depth - depth_tolerance
                 current_depth_max = layer_bottom_depth + depth_tolerance
                 
@@ -1049,20 +1049,54 @@ class RGBDDetector:
         if debug == 1:
             cv2.imshow("depth_normalized", depth_normalized) 
 
+        # 方法1：深度图边缘检测
         # Canny边缘检测
         thresh1 = 7
         thresh2 = 30
-        edges = cv2.Canny(depth_normalized, thresh1, thresh2)
-        kernel = np.ones((5, 1), np.uint8)
-        edges = cv2.dilate(edges, kernel, iterations=1)
-        if debug == 1:
-            cv2.imshow("edge", edges)
+        edges_depth = cv2.Canny(depth_normalized, thresh1, thresh2)
+
+        # 方法2：RGB图灰度边缘检测
+        gray_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2GRAY)
+        gray_img_roi = gray_img[roi_y_start:roi_y_end, roi_x_start:roi_x_end].copy()
         
+        # RGB图的Canny边缘
+        thresh1_rgb = 50
+        thresh2_rgb = 30
+        edges_rgb = cv2.Canny(gray_img_roi, thresh1_rgb, thresh2_rgb)
+
+        # 方法3：Sobel水平边缘检测（只保留水平方向的边缘）
+        # 注意：Sobel算子计算的是梯度，需要进一步处理
+        sobely = cv2.Sobel(gray_img_roi, cv2.CV_64F, 0, 1, ksize=3)
+        sobely_abs = cv2.convertScaleAbs(sobely)
+        
+        # 对Sobel结果进行阈值化，只保留强边缘
+        _, sobely_thresh = cv2.threshold(sobely_abs, 30, 255, cv2.THRESH_BINARY)
+        # 可选：形态学操作，连接断开的边缘
+        kernel_horizontal = np.ones((1, 5), np.uint8)  # 水平方向的核，用于连接水平边缘
+        sobely_thresh = cv2.morphologyEx(sobely_thresh, cv2.MORPH_CLOSE, kernel_horizontal)
+        
+        kernel = np.ones((5, 1), np.uint8)
+        edges = cv2.dilate(edges_depth, kernel, iterations=1)
+        if debug == 1:
+            cv2.imshow("edges_depth", edges_depth)
+            cv2.imshow("gray_img_roi", gray_img_roi)
+            cv2.imshow("edges_rgb", edges_rgb)
+            cv2.imshow("sobely_thresh", sobely_thresh)
+
+        # ===================== 【核心修正】叠加多个边缘检测结果 =====================
+        # 方法1：取最大值（OR操作）
+        edges_combined = cv2.bitwise_or(edges_depth, edges_rgb)
+        edges_combined = cv2.bitwise_or(edges_combined, sobely_thresh)
+        
+        # 方法2：加权平均（可以根据需要调整权重）
+        # edges_combined = cv2.addWeighted(edges_depth, 0.5, edges_rgb, 0.5, 0)
+        # edges_combined = cv2.addWeighted(edges_combined, 0.7, sobely_thresh, 0.3, 0)
+
         # 直线最小长度阈值
         minLineLength = roi_w * 0.1
 
         # 霍夫直线检测
-        lines = cv2.HoughLinesP(edges, 
+        lines = cv2.HoughLinesP(edges_combined, 
                             rho=1, 
                             theta=np.pi/180, 
                             threshold=10, 
@@ -1587,7 +1621,7 @@ class RGBDDetector:
             elif ptype == PType.IRON_CHIP_CHECK: # 铁屑
                 exists_flag, coords = self._judge_detect_result(regions, ptype, rgb_img)
             elif ptype == PType.FEED_CHECK: # 上料
-                regions = self._depth_segment_find_horizontal_line(depth_img)
+                regions = self._depth_segment_find_horizontal_line(depth_img, rgb_img)
                 if not regions:
                     exists_flag = DetectStatus.NOTHING
                 elif  self.feed_edge_index >= len(regions):
@@ -1902,6 +1936,22 @@ class RGBDDetector:
 
 
 # ===================== 测试主函数 调用示例 =====================
+def get_rgb_filename(depth_filename):
+    """根据深度图文件名获取对应的RGB文件名"""
+    depth_path = Path(depth_filename)
+    
+    # 直接替换 depth_ 为 rgb_，并修改扩展名
+    rgb_name = depth_path.name.replace("depth_", "rgb_", 1)
+    rgb_name = rgb_name.replace(".png", ".jpg")  # 假设RGB是jpg格式
+    
+    rgb_path = depth_path.parent / rgb_name
+    
+    # 如果jpg不存在，尝试png
+    if not rgb_path.exists():
+        rgb_path = depth_path.parent / rgb_name.replace(".jpg", ".png")
+    
+    return str(rgb_path) if rgb_path.exists() else None
+
 if __name__ == "__main__":
     detector = RGBDDetector()
     product_no = "M001"
@@ -1911,20 +1961,25 @@ if __name__ == "__main__":
         exit(-1)
     print("初始化成功！")
 
-    depth_filename = "./depth_image.png"
-    depth_filename = "./depth_image1.png"
-    depth_filename = "./depth_1768713398274.png"
-    depth_filename = "./depth_1768813732047.png"
-    depth_filename = "20260123/depth_1769134430866.png"
+    depth_filename = "data/depth_image.png"
+    depth_filename = "data/depth_image1.png"
+    depth_filename = "data/depth_1768713398274.png"
+    depth_filename = "data/depth_1768813732047.png"
+    depth_filename = "data/20260123/depth_1769134430866.png"
     
+    # 默认rgb图像
     # rgb_img = cv2.imread("./rgb_image.png")
-    rgb_img = cv2.imread("20260123/rgb_1769134430866.jpg")
+    # rgb_img = cv2.imread("data/20260123/rgb_1769134430866.jpg")
 
     # 获取所有PNG文件
-    image_folder = "20260123"
-    image_folder = "20260204-9"
-    image_folder = "camera_img(2)"
-    image_folder = "../../../camera_img"
+    image_folder = "data/20260123"
+    image_folder = "data/20260204-9"
+    image_folder = "data/camera_img(2)"
+    image_folder = "data/20260304 (7)"
+    image_folder = "data/camera_img/625"
+    image_folder = "data/20260309-3"
+    image_folder = "data/20260310-14"
+    image_folder = "data/20260319"
     image_files = list(Path(image_folder).glob("*.png"))
 
     camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260303"
@@ -1943,10 +1998,18 @@ if __name__ == "__main__":
     os.makedirs(output_folder, exist_ok=True)
 
     for i, image_file in enumerate(image_files):
+        if i < 32:
+            continue
         print(f"\n处理文件 {i+1}/{len(image_files)}: {image_file.name}")
         depth_filename = str(image_file)
-        print(depth_filename)
         depth_img = cv2.imread(depth_filename, cv2.IMREAD_UNCHANGED)
+
+        # 获取对应的RGB图像
+        rgb_filename = get_rgb_filename(str(depth_filename))
+        if not rgb_filename:
+            print(f"未找到对应的RGB图像: {depth_file.name}")
+            continue
+        rgb_img = cv2.imread(rgb_filename)
 
         if rgb_img is None or depth_img is None:
             print("读取图像失败，请检查路径！")

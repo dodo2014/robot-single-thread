@@ -259,11 +259,44 @@ class ConfigEditorUI(QMainWindow):
         # 【核心修改】创建内部 TabWidget 管理两个表格
         self.tabs_points = QTabWidget()
 
-        self.table_normal_points = self._create_points_table()
-        self.tabs_points.addTab(self.table_normal_points, "普通点位 (points)")
+        self.tabs_points.setStyleSheet("""
+                    QTabBar::tab {
+                        background-color: #E0E0E0;  /* 未选中时的浅灰背景 */
+                        color: #333333;             /* 未选中时的字体颜色 */
+                        padding: 8px 10px;          /* 标签内边距，让标签大一点 */
+                        
+                        min-width: 150px;         /* 标签最小宽度（根据你的文字长度调整） */
+                        
+                        border-top-left-radius: 4px;/* 圆角 */
+                        border-top-right-radius: 4px;
+                        margin-right: 0px;          /* 标签之间的间距 */
+                        font-size: 10pt;
+                    }
+                    QTabBar::tab:hover:!selected {
+                        background-color: #B0BEC5;  /* 鼠标悬浮但未选中时的颜色 */
+                    }
+                    QTabBar::tab:selected {
+                        background-color: #2196F3;  /* 选中时的蓝色背景 */
+                        color: white;               /* 选中时的白色字体 */
+                        font-weight: bold;          /* 选中时字体加粗 */
+                    }
+                    QTabWidget::pane {
+                        border: 1px solid #2196F3;  /* 给下方的表格区域加一圈蓝色边框，视觉更统一 */
+                        top: -1px; 
+                    }
+                """)
 
+        # 1. 普通点位
+        self.table_normal_points = self._create_points_table()
+        self.tabs_points.addTab(self.table_normal_points, "普通点位")
+
+        # 2. 阵列搜寻点位
         self.table_search_points = self._create_points_table()
-        self.tabs_points.addTab(self.table_search_points, "阵列搜寻点位 (search_points)")
+        self.tabs_points.addTab(self.table_search_points, "阵列搜寻点位")
+
+        # 3. 翻肘安全过渡点位
+        self.table_flip_points = self._create_points_table()
+        self.tabs_points.addTab(self.table_flip_points, "翻肘过渡点位")
 
         right_layout.addWidget(self.tabs_points)
 
@@ -763,11 +796,14 @@ class ConfigEditorUI(QMainWindow):
 
     def on_process_selected(self, current_item, previous_item):
         if not current_item:
+            # 清空所有
             self.lbl_proc_name.clear()
             self.lbl_proc_type.clear()
             self.lbl_proc_d_addr.clear()
+
             self.table_normal_points.setRowCount(0)
             self.table_search_points.setRowCount(0)
+            self.table_flip_points.setRowCount(0)
             return
 
         pid = current_item.text(0)
@@ -834,9 +870,11 @@ class ConfigEditorUI(QMainWindow):
         # 【核心修改】分别填充两个表格
         normal_points = process_data.get('points', [])
         search_points = process_data.get('search_points', [])
+        flip_via_points = process_data.get('flip_via_points', [])  # 新增读取
 
         self._populate_points_table(self.table_normal_points, normal_points)
         self._populate_points_table(self.table_search_points, search_points)
+        self._populate_points_table(self.table_flip_points, flip_via_points)  # 新增填充
 
     def add_process_item(self):
         """新增一个动作流程"""
@@ -1008,6 +1046,28 @@ class ConfigEditorUI(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "异常", f"示教失败: {e}")
 
+    def teach_flip_point(self):
+        """专属示教功能：将机械臂当前实时 X,Y 坐标填入安全过渡点"""
+        if not self.controller:
+            return
+
+        try:
+            real_point = self.controller.get_realtime_point()
+            if not real_point:
+                QMessageBox.warning(self, "错误", "无法获取当前机械臂坐标")
+                return
+
+            x, y, z, r = real_point['coords']
+
+            # 只填入 XY，因为 Z 轴是代码动态获取同层高度的
+            self.edit_flip_x.setText(f"{x:.2f}")
+            self.edit_flip_y.setText(f"{y:.2f}")
+            self.edit_flip_z.setText(f"{z:.2f}")
+            self.edit_flip_r.setText(f"{r:.2f}")
+
+        except Exception as e:
+            QMessageBox.warning(self, "异常", f"示教安全点失败: {e}")
+
     # def add_point_row(self):
     #     current_row = self.table_points.currentRow()
     #     if current_row >= 0:
@@ -1161,6 +1221,7 @@ class ConfigEditorUI(QMainWindow):
             # 【核心修改】分别从两个表格提取数据
             new_points = self._extract_points_from_table(self.table_normal_points)
             new_search_points = self._extract_points_from_table(self.table_search_points)
+            new_flip_points = self._extract_points_from_table(self.table_flip_points)  # 新增提取
 
             # 更新内存数据
             if pid not in self.config_data['processes']:
@@ -1175,8 +1236,10 @@ class ConfigEditorUI(QMainWindow):
             except ValueError:
                 pass
 
+            # 保存表格数据
             self.config_data['processes'][pid]['points'] = new_points
             self.config_data['processes'][pid]['search_points'] = new_search_points
+            self.config_data['processes'][pid]['flip_via_points'] = new_flip_points  # 新增保存
 
             self._write_to_file()
 
