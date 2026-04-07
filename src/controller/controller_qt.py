@@ -547,7 +547,7 @@ class Controller(QThread):
         # 暂停检查
         self.check_and_handle_pause()
 
-        point_address = const.point_addresses[-1]
+        point_address = const.point_once_address
         addr_j1, addr_j2, addr_j3, addr_j4, addr_vel, addr_acc = point_address
         coords = point.get("coords", [0, 0, 0, 0])
         elbow_config = point.get("config")
@@ -716,8 +716,12 @@ class Controller(QThread):
                                                                                               self.nn3, xe, ye, ze, te,
                                                                                               distance,
                                                                                               config_curr=config_curr)
+            name = "FP_P0" # forward point
+            if distance < 0:
+                name = "BP_P0" # backward point
+
             foward_point = {
-                "name": "FP_P0",
+                "name": name,
                 "coords": [
                     target_x,
                     target_y,
@@ -742,8 +746,12 @@ class Controller(QThread):
             target_z = ze + distance
             target_r = te
 
+            name = "UP_P0"
+            if distance < 0:
+                name ="DOWN_P0"
+
             new_point = {
-                "name": "UP_P0",
+                "name": name,
                 "coords": [
                     target_x,
                     target_y,
@@ -1224,49 +1232,51 @@ class Controller(QThread):
             # 到这里说明 res_status == "ok"
             logger.info(f"视觉执行成功, 返回原始坐标 {coords}")
 
+            """
             ##########################################
-            # 让 相机中心 对准物料，且高度保持在设定值
+            # 相机逼近运动到合适的距离，让 相机中心 对准物料，且高度保持在设定值
             ##########################################
-
+            
             target_relative = coords[0]
             current_dist = target_relative[2]
             logger.info(f"当前相机距离物料高度: {current_dist:.1f} mm (阈值: {const.PRECISE_PHOTO_DISTANCE})")
 
-            # # 判断是否需要逼近拍照
-            # if current_dist > const.PRECISE_PHOTO_DISTANCE + 20.0:  # 加10mm容差防止反复跳
-            #     logger.info(f"距离过远，执行相机中心逼近...")
-            #     # 计算一个目标点：让相机对准物料，且高度为 400
-            #
-            #     # Z轴补偿计算
-            #     # 目标：让相机距离物体 400mm
-            #     # 公式：Target_Z = Curr_Z - (zc - 400)
-            #     # 这等同于在 compute_gripper_target 中传入 z_diff = 400
-            #     z_target_diff = const.PRECISE_PHOTO_DISTANCE
-            #     approach_coord = self.transform_tool_coord(target_relative, cheat_cemera=1, cheat_z_diff=z_target_diff)
-            #     if not approach_coord:
-            #         logger.error("逼近点逆解失败")
-            #         return "ERROR"
-            #
-            #     # 构建坐标
-            #     approach_pt = {
-            #         "name": f"Vision_Approach_{loop_count}",
-            #         "coords": approach_coord,
-            #         "photo": 0,   # 移动到位后，通过循环再次触发拍照，不要在这里设1
-            #         "config": config
-            #     }
-            #     logger.info(f"逼近坐标: {approach_pt}")
-            #     # 为了安全，可以限制一下最小Z值 (防止视觉算出负数撞地)
-            #     if approach_pt["coords"][2] < -440.0:
-            #         logger.warning(f"逼近高度过低 ({approach_pt['coords'][2]}), 强制限位")
-            #         approach_pt["coords"][2] = -440.0
-            #
-            #     # 移动到新位置
-            #     if not self._move_segment_to_target(process_addr, target_point=approach_pt):
-            #         return "ERROR" # 移动失败(比如急停)
-            #
-            #     # 移动完成后，进入下一次循环，重新拍照
-            #     # time.sleep(0.1)
-            #     continue
+            # 判断是否需要逼近拍照
+            if current_dist > const.PRECISE_PHOTO_DISTANCE + 20.0:  # 加10mm容差防止反复跳
+                logger.info(f"距离过远，执行相机中心逼近...")
+                # 计算一个目标点：让相机对准物料，且高度为 400
+
+                # Z轴补偿计算
+                # 目标：让相机距离物体 400mm
+                # 公式：Target_Z = Curr_Z - (zc - 400)
+                # 这等同于在 compute_gripper_target 中传入 z_diff = 400
+                z_target_diff = const.PRECISE_PHOTO_DISTANCE
+                approach_coord = self.transform_tool_coord(target_relative, cheat_cemera=1, cheat_z_diff=z_target_diff)
+                if not approach_coord:
+                    logger.error("逼近点逆解失败")
+                    return "ERROR"
+
+                # 构建坐标
+                approach_pt = {
+                    "name": f"Vision_Approach_{loop_count}",
+                    "coords": approach_coord,
+                    "photo": 0,   # 移动到位后，通过循环再次触发拍照，不要在这里设1
+                    "config": config
+                }
+                logger.info(f"逼近坐标: {approach_pt}")
+                # 为了安全，可以限制一下最小Z值 (防止视觉算出负数撞地)
+                if approach_pt["coords"][2] < -440.0:
+                    logger.warning(f"逼近高度过低 ({approach_pt['coords'][2]}), 强制限位")
+                    approach_pt["coords"][2] = -440.0
+
+                # 移动到新位置
+                if not self._move_segment_to_target(process_addr, target_point=approach_pt):
+                    return "ERROR" # 移动失败(比如急停)
+
+                # 移动完成后，进入下一次循环，重新拍照
+                # time.sleep(0.1)
+                continue
+            """
 
             # === 距离合适 (<= 400)，计算最终抓取坐标并保存 ===
             transform_coords = []

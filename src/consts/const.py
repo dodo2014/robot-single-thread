@@ -27,6 +27,8 @@ point_addresses = [
     # 第10组坐标地址，0x40108, 0x40110, 0x40112, 0x40114, 0x40116, 0x40118
 ]
 
+point_once_address = point_addresses[7]  # 发送单个坐标的地址位
+
 # 坐标间插值数
 point_interpolated_num = 7
 
@@ -104,11 +106,11 @@ photo_type_unloading = 3 # 下料
 photo_type_aluminum = 4  # 铝屑识别
 
 # 物料参数
-product_height = 147  # 单个产品的高度
-interval_height = 30  # 层与层之间间隔木条的高度（mm）
-base_depth = 400 # 首层标准深度，最上层拍照位，深度相机与物料的距离
+product_height = 117  # 单个产品的高度
+interval_height = 15  # 层与层之间间隔木条的高度（mm）
+base_depth = 322 # 首层标准深度，最上层拍照位，深度相机与物料的距离
 product_cols_each_layer = 5 # 每层的物料数量
-product_total_layers = 7 # 物料的总层数
+product_total_layers = 2 # 物料的总层数
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8 # 200

@@ -135,6 +135,21 @@ class ScaraKinematics:
         计算相对差值：125.1756−(−12.5557)=125.1756+12.5557=137.7313°
         这个结果（137.73°）正好等于解析法算出来的 the2
 
+        :param xe, ye, ze, float, 坐标x,y,z
+        :param te, float, 末端电机相对于小臂的转角
+        :param l1, float, 大臂长
+        :param l2, float, 小臂长
+        :param z0, float, 机械臂z轴初始高度
+        :param nn3, float, 丝杆导程的倒数
+        :param config_type, string, 肘关节姿态
+        :return {
+            'config': 'elbow_up',
+            'the1': 0.0,  # 转为度
+            'the2': 0.0,  # 转为度
+            'the3': 0.0,  # 圈数/距离
+            'th4': 0.0  # 假设输入已经是度
+        }
+
         """
         try:
             # 1. 工作空间检查
@@ -637,12 +652,12 @@ if __name__ == "__main__":
     point = {
                     "name": "Teach_P1",
                     "coords": [
-                        -258.29,
-                        1242.38,
-                        10.34,
-                        -127.5
+                        -213.97,
+                        1354.65,
+                        -12.36,
+                        -129.49
                     ],
-                    "photo": 0,
+                    "photo": 1,
                     "config": "elbow_up"
                 }
     # xe, ye, ze, te = point.get('coords')
@@ -652,18 +667,20 @@ if __name__ == "__main__":
     xe = point.get("coords")[0]
     ye = point.get("coords")[1]
     ze = point.get("coords")[2]
+    te = point.get("coords")[3]
     # world_r = 90
     motor_r = point.get("coords")[3]
     config_curr = point.get("config")
 
-
+    res = ScaraKinematics().inverse_kinematics_v2(xe, ye, ze, te, l1, l2, z0, nn3, config_type=config_curr)
+    print(res)
 
     # motor_r = ScaraKinematics().calculate_motor_r_from_world_angle(xe, ye, ze, world_r, l1, l2, z0, nn3, config_curr)
     # print([xe, ye, ze, motor_r])
 
 
     # calculate_forward_move(self, l1, l2, z0, nn3, xe, ye, ze, te, j1_curr, j2_curr, distance, config_curr='elbow_up'):
-    forward_point = ScaraKinematics().calculate_forward_move(l1, l2, z0, nn3, xe, ye, ze, motor_r, distance, config_curr='elbow_up')
-    print(forward_point)
+    # forward_point = ScaraKinematics().calculate_forward_move(l1, l2, z0, nn3, xe, ye, ze, motor_r, distance, config_curr='elbow_up')
+    # print(forward_point)
 
     sys.exit(1)

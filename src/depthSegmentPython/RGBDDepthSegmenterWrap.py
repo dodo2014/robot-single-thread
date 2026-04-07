@@ -57,7 +57,8 @@ class RGBDDetector:
         self.product_height = 100
         self.product_width = 120
         self.interval_height = 20
-        self.tray_start_height = 1500
+        self.product_start_height = 340
+        self.tray_start_height = 1000
 
         # ===================== 多ROI配置拆分 =====================
         # 1. 上料ROI（原ROI）
@@ -251,6 +252,7 @@ class RGBDDetector:
             self.product_height = cfg.get("product_height", 100)
             self.product_width = cfg.get("product_width", 160)
             self.interval_height = cfg.get("interval_height", 20)
+            self.product_start_height = cfg.get("product_start_height", 340)
             self.tray_start_height = cfg.get("tray_start_height", 1000)
             self.product_count_per_layer = cfg.get("product_count_per_layer", 8)
 
@@ -891,8 +893,8 @@ class RGBDDetector:
         
         avg_side1 = np.median(side1_depths) if side1_depths else float('inf')
         avg_side2 = np.median(side2_depths) if side2_depths else float('inf')
-        print(f"  侧1中值深度: {avg_side1 if avg_side1 != float('inf') else 'None'}")
-        print(f"  侧2中值深度: {avg_side2 if avg_side2 != float('inf') else 'None'}")
+        # print(f"  侧1中值深度: {avg_side1 if avg_side1 != float('inf') else 'None'}")
+        # print(f"  侧2中值深度: {avg_side2 if avg_side2 != float('inf') else 'None'}")
 
         '''
         # 过滤：在均值上下偏差内重新筛选
@@ -961,11 +963,13 @@ class RGBDDetector:
         product_height = self.product_height # 产品高度
         product_width = self.product_width # 产品宽度
         interval_height = self.interval_height # 间隔高度
+        product_start_height = self.product_start_height # 顶层产品初始高度
         tray_depth = self.tray_start_height # 托盘深度
         
         # 计算ROI内的有效深度
         roi_valid_depths = roi_depth[(roi_depth != self.depth_invalid) & 
                                      (roi_depth >= self.feed_depth_min) & 
+                                     (roi_depth >= self.product_start_height) & 
                                      (roi_depth <= self.feed_depth_max)]
         
         current_layer = 0
@@ -975,7 +979,8 @@ class RGBDDetector:
         if len(roi_valid_depths) > 0:
             # 获取最浅深度（最上层产品）
             roi_min_depth = np.min(roi_valid_depths)
-            print(f"ROI最浅深度: {roi_min_depth}mm, 托盘深度: {tray_depth}mm")
+            print(f"ROI最浅深度: {roi_min_depth}mm")
+            print(f"最上层产品深度: {product_start_height}mm")
 
             # 计算当前层
             # distance_from_tray = tray_depth - roi_min_depth
@@ -993,8 +998,8 @@ class RGBDDetector:
             print(f"  最浅深度: {sorted_depths[0]:.1f}mm")
             print(f"  最深深度: {sorted_depths[-1]:.1f}mm")
             
-            # 取倒数的一半作为比例（例如每层5个产品，则取1/10）
-            # 这样无论层中有多少产品，都能取到最上面一个产品的深度范围
+            # 取最上层的深度范围（根据产品数量比例）
+            # 每层产品数的倒数的一半作为采样比例
             product_count_per_layer = max(1, self.product_count_per_layer)
             depth_ratio = 1.0 / (product_count_per_layer * 2)  # 每层产品数的倒数的一半
             depth_ratio = min(depth_ratio, 0.2)  # 限制最大20%
@@ -1011,11 +1016,51 @@ class RGBDDetector:
             target_depth_std = np.std(top_depth_values)
             
             print(f"上层区域统计:")
-            print(f"  采样比例: {depth_ratio:.3f} (1/{product_count_per_layer*2:.0f})")
+            print(f"  采样比例: {depth_ratio:.3f}")
             print(f"  采样像素: {top_depth_count}")
             print(f"  平均深度: {target_depth:.1f}mm")
             print(f"  深度标准差: {target_depth_std:.1f}mm")
             
+            # ===== 计算当前层：从最上层开始，自上而下计算 =====
+            # 层厚 = 产品高度 + 间隔高度
+            layer_thickness = product_height + interval_height
+            
+            # 计算当前深度相对于最上层的偏移
+            depth_offset = target_depth - product_start_height
+            
+            # 如果偏移量为负（实际深度小于最上层深度），则视为第0层
+            if depth_offset < 0:
+                current_layer = 0
+                print(f"警告: 检测深度({target_depth:.1f}mm)小于最上层深度({product_start_height:.1f}mm)，使用第0层")
+            else:
+                # 计算当前层号（0-based）
+                current_layer = int(depth_offset // layer_thickness)
+                
+                # 确保层号不超过最大可能层数
+                max_layer = 10  # 最大层数限制
+                current_layer = min(current_layer, max_layer)
+            
+            print(f"深度偏移: {depth_offset:.1f}mm")
+            print(f"层厚度: {layer_thickness:.1f}mm")
+            print(f"当前层: 第{current_layer + 1}层 (层号: {current_layer})")
+
+            # 计算当前层的深度范围（自上而下）
+            # 第0层（最上层）：product_start_height ~ product_start_height + layer_thickness
+            # 第1层：product_start_height + layer_thickness ~ product_start_height + 2*layer_thickness
+            # 以此类推
+            layer_top_depth = product_start_height + current_layer * layer_thickness      # 当前层下边界（深）
+            layer_bottom_depth = product_start_height + (current_layer + 1) * layer_thickness   # 当前层上边界（浅）
+            
+            # 增加容差
+            depth_tolerance = 0
+            current_depth_min = layer_top_depth - depth_tolerance
+            current_depth_max = layer_bottom_depth + depth_tolerance
+  
+            print(f"当前层: 第{current_layer + 1}层")
+            print(f"层深度范围: {layer_top_depth:.1f} - {layer_bottom_depth:.1f}mm")
+            print(f"检测深度范围: {current_depth_min:.1f} - {current_depth_max:.1f}mm")
+
+            '''
             # 计算当前层（基于目标深度）
             distance_from_tray = tray_depth - target_depth
             layer_thickness = product_height + interval_height
@@ -1037,7 +1082,7 @@ class RGBDDetector:
                 print(f"当前层: 第{current_layer + 1}层")
                 print(f"层深度范围: {layer_top_depth:.1f} - {layer_bottom_depth:.1f}mm")
                 print(f"检测深度范围: {current_depth_min:.1f} - {current_depth_max:.1f}mm")
-        
+            '''
         debug = 0
 
         # 步骤1：创建深度边缘图
@@ -1223,7 +1268,7 @@ class RGBDDetector:
                 print(f'center = {cx}, {cy}')
                 
                 avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset=15)
-                if avg_depth < 400:
+                if avg_depth and avg_depth < 300:
                     avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset=30)
 
                 if avg_depth is None:
@@ -1972,18 +2017,10 @@ if __name__ == "__main__":
     # rgb_img = cv2.imread("data/20260123/rgb_1769134430866.jpg")
 
     # 获取所有PNG文件
-    image_folder = "data/20260123"
-    image_folder = "data/20260204-9"
-    image_folder = "data/camera_img(2)"
-    image_folder = "data/20260304 (7)"
-    image_folder = "data/camera_img/625"
-    image_folder = "data/20260309-3"
-    image_folder = "data/20260310-14"
     image_folder = "data/20260319"
     image_files = list(Path(image_folder).glob("*.png"))
 
-    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260303"
-    rgb_img = cv2.imread(camera_img_folder / "rgb_1772528624363.jpg")
+    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260319"
 
     image_files = list(camera_img_folder.glob("*.png"))
     print(image_files)
@@ -1998,7 +2035,9 @@ if __name__ == "__main__":
     os.makedirs(output_folder, exist_ok=True)
 
     for i, image_file in enumerate(image_files):
-        if i < 32:
+        # if i < 131:
+        #     continue
+        if image_file.name.startswith("detect_result_horizontal_line_"):
             continue
         print(f"\n处理文件 {i+1}/{len(image_files)}: {image_file.name}")
         depth_filename = str(image_file)
@@ -2007,7 +2046,7 @@ if __name__ == "__main__":
         # 获取对应的RGB图像
         rgb_filename = get_rgb_filename(str(depth_filename))
         if not rgb_filename:
-            print(f"未找到对应的RGB图像: {depth_file.name}")
+            print(f"未找到对应的RGB图像: {depth_filename}")
             continue
         rgb_img = cv2.imread(rgb_filename)
 
@@ -2030,7 +2069,7 @@ if __name__ == "__main__":
         # ptype = PType.UNLOAD_CHECK
         detect_res = detector.detect(ptype, rgb_img, depth_img)
         print("检测结果:\n", json.dumps(detect_res, ensure_ascii=False, indent=2))
-
+        print(f"\n处理文件 {i + 1}/{len(image_files)}: {image_file.name} done...")
         depth_color = detector.depth_pseudo_color(depth_img)
 
         result_img = detector.draw_result_with_rotated_box(depth_color, detect_res)
@@ -2040,5 +2079,7 @@ if __name__ == "__main__":
         cv2.imwrite(file_name, result_img)
 
         cv2.waitKey(0)
+
+
 
     cv2.destroyAllWindows()

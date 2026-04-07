@@ -97,6 +97,7 @@ class DetectAlgoService:
                 continue
             except Exception as e:
                 print(f"Error in save worker: {e}")
+                logger.error(f"Error in save worker: {e}")
 
     def _save_to_local(self, color_arr, depth_arr):
         """保存图像到本地"""
