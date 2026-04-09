@@ -105,7 +105,7 @@ def compute_gripper_target(
 
         # 5. 计算目标角度
         # 目标是让夹爪转到 rc 角度。 rc 是物料相对于相机的角度。
-        # 目标绝对角度 = 当前绝对角度 + rc
+        # 目标绝对角度 = 当前绝对角度 + rc, 这边用-rc，因为相机给出的角度方向和基座标相反
 
         # target_abs_angle = current_abs_angle_deg + rc
         target_abs_angle = current_abs_angle_deg - rc  + angle_offset #

@@ -108,7 +108,7 @@ photo_type_aluminum = 4  # 铝屑识别
 # 物料参数
 product_height = 117  # 单个产品的高度
 interval_height = 15  # 层与层之间间隔木条的高度（mm）
-base_depth = 322 # 首层标准深度，最上层拍照位，深度相机与物料的距离
+base_depth = 320 # 首层标准深度，最上层拍照位，深度相机与物料的距离,低于这个值，物料上沿的深度会丢失
 product_cols_each_layer = 5 # 每层的物料数量
 product_total_layers = 2 # 物料的总层数
 

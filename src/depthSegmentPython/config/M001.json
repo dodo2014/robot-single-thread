@@ -27,18 +27,18 @@
 	"tool_coord_r": 0,              // 工具旋转角度偏移（度）
 	
 	// ==================== 产品尺寸参数 ====================
-	"product_height": 117,          // 单个产品的高度（mm），用于分层检测
-	"product_width": 123,           // 单个产品的宽度（mm），用于过滤直线
-	"interval_height": 15,          // 层与层之间间隔木条的高度（mm）
-	"product_start_height": 175,    // 顶层产品初始高度（mm）
+	"product_height": 40,          // 单个产品的高度（mm），用于分层检测
+	"product_width": 40,           // 单个产品的宽度（mm），用于过滤直线
+	"interval_height": 92,          // 层与层之间间隔木条的高度（mm）
+	"product_start_height": 320,    // 顶层产品初始高度（mm）
 	"tray_start_height": 1000,      // 托盘初始高度（mm），底层产品的基准深度
 	"product_count_per_layer": 2,  // 上料每层产品数量
 	
 	// ==================== 上料区域配置 ====================
 	"feed_roi_x": 300,              // 上料ROI左上角X坐标（像素）
-	"feed_roi_y": 0,                // 上料ROI左上角Y坐标（像素）
+	"feed_roi_y": 270,                // 上料ROI左上角Y坐标（像素）
 	"feed_roi_w": 800,              // 上料ROI宽度（像素）
-	"feed_roi_h": 620,              // 上料ROI高度（像素）
+	"feed_roi_h": 330,              // 上料ROI高度（像素）
 	
 	// "feed_roi_x": 400,              // 上料ROI左上角X坐标（像素）
 	// "feed_roi_y": 157,                // 上料ROI左上角Y坐标（像素）
@@ -48,12 +48,19 @@
 	// ==================== 上料算法参数 ====================
 	"feed_depth_min": 200,          // 上料区域有效深度最小值（mm），过滤近距离噪声
 	"feed_depth_max": 1500,         // 上料区域有效深度最大值（mm），过滤远距离背景
+	"feed_depth_thresh": 7,		// 深度跳变阈值
 	"feed_min_length": 200,         // 产品最小宽度（像素），用于过滤过短的直线
 	"feed_edge_index": 0,			// 抓取上料产品边缘的序号（0表示第一个，1表示第二个）
 	"feed_offset_x": 0,				// 抓取位置到边缘的偏移量x(mm)
-	"feed_offset_y": -33,			// 抓取位置到边缘的偏移量y(mm)
-	"feed_offset_z": -84,			// 抓取位置到边缘的偏移量z(mm)
+	"feed_offset_y": 0,			// 抓取位置到边缘的偏移量y(mm)
+	"feed_offset_z": 0,			// 抓取位置到边缘的偏移量z(mm)
+	"feed_use_rgb": 1,				// 是否融合rgb图检测
 
+	"template_type": "depth",		// 模板匹配类型："depth" or "rgb"
+	"template_path": "./templates/0403.png", //模板图像
+	"template_threshold": 0.2,		//模板匹配阈值
+	"template_edge_offset": 4,		//模板边缘到底部的偏移（像素）
+	
 	// ==================== 物料缓存台配置 ====================
 	"material_roi_x": 0,             // 物料缓存台ROI左上角X坐标（像素）
 	"material_roi_y": 0,             // 物料缓存台ROI左上角Y坐标（像素）

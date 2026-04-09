@@ -48,17 +48,13 @@ class RGBDDetector:
         self.gaussian_sigma = 1.2
         self.sort_rule = SortRule.SORT_BY_Y_DESC
 
-        # 上料深度区间过滤参数
-        self.feed_depth_min = 50    
-        self.feed_depth_max = 2000
-        self.product_count_per_layer = 8
-
         # 产品尺寸参数
         self.product_height = 100
         self.product_width = 120
         self.interval_height = 20
         self.product_start_height = 340
         self.tray_start_height = 1000
+        self.product_count_per_layer = 8
 
         # ===================== 多ROI配置拆分 =====================
         # 1. 上料ROI（原ROI）
@@ -66,7 +62,13 @@ class RGBDDetector:
         self.feed_roi_y = 0
         self.feed_roi_w = 640
         self.feed_roi_h = 480
-        self.feed_min_length = 300 # 产品最小宽度（像素）
+
+        
+        # 上料深度区间过滤参数
+        self.feed_depth_min = 50    
+        self.feed_depth_max = 2000
+        self.feed_depth_thresh = 10
+        self.feed_min_length = 200
         self.feed_edge_index = 0
         self.feed_offset_x = 0
         self.feed_offset_y = 0
@@ -265,11 +267,17 @@ class RGBDDetector:
             # 上料算法参数
             self.feed_depth_min = cfg.get("feed_depth_min", 50)
             self.feed_depth_max = cfg.get("feed_depth_max", 2000)
+            self.feed_depth_thresh = cfg.get("feed_depth_thresh", 10)
             self.feed_min_length = cfg.get("feed_min_length", 300)
             self.feed_edge_index = cfg.get("feed_edge_index", 0)
             self.feed_offset_x = cfg.get("feed_offset_x", 0)
             self.feed_offset_y = cfg.get("feed_offset_y", 0)
             self.feed_offset_z = cfg.get("feed_offset_z", 0)
+            
+            self.template_type = cfg.get("template_type", "")
+            self.template_path = cfg.get("template_path", "")
+            self.template_threshold = cfg.get("template_threshold", 0.6)
+            self.template_edge_offset = cfg.get("template_edge_offset", 0)
             
             # 2. 物料缓存台ROI + 深度范围
             self.material_roi_x = cfg.get("material_roi_x", 0)
@@ -1000,14 +1008,15 @@ class RGBDDetector:
             
             # 取最上层的深度范围（根据产品数量比例）
             # 每层产品数的倒数的一半作为采样比例
-            product_count_per_layer = max(1, self.product_count_per_layer)
-            depth_ratio = 1.0 / (product_count_per_layer * 2)  # 每层产品数的倒数的一半
-            depth_ratio = min(depth_ratio, 0.2)  # 限制最大20%
-            depth_ratio = max(depth_ratio, 0.05)  # 限制最小5%
-            
-            top_depth_count = int(len(sorted_depths) * depth_ratio)
-            top_depth_count = max(top_depth_count, 10)  # 至少取10个点
-            
+            # product_count_per_layer = max(1, self.product_count_per_layer)
+            # depth_ratio = 1.0 / (product_count_per_layer * 2)  # 每层产品数的倒数的一半
+            # depth_ratio = min(depth_ratio, 0.2)  # 限制最大20%
+            # depth_ratio = max(depth_ratio, 0.05)  # 限制最小5%
+  
+            # top_depth_count = int(len(sorted_depths) * depth_ratio)
+            # top_depth_count = max(top_depth_count, 10)  # 至少取10个点
+            top_depth_count = min(len(sorted_depths), 100) #固定100个点
+
             # 取深度最小的部分（最上层产品）
             top_depth_values = sorted_depths[:top_depth_count]
             
@@ -1015,11 +1024,11 @@ class RGBDDetector:
             target_depth = np.mean(top_depth_values)
             target_depth_std = np.std(top_depth_values)
             
-            print(f"上层区域统计:")
-            print(f"  采样比例: {depth_ratio:.3f}")
-            print(f"  采样像素: {top_depth_count}")
-            print(f"  平均深度: {target_depth:.1f}mm")
-            print(f"  深度标准差: {target_depth_std:.1f}mm")
+            # print(f"上层区域统计:")
+            # print(f"  采样比例: {depth_ratio:.3f}")
+            # print(f"  采样像素: {top_depth_count}")
+            # print(f"  平均深度: {target_depth:.1f}mm")
+            # print(f"  深度标准差: {target_depth_std:.1f}mm")
             
             # ===== 计算当前层：从最上层开始，自上而下计算 =====
             # 层厚 = 产品高度 + 间隔高度
@@ -1049,7 +1058,7 @@ class RGBDDetector:
             # 第1层：product_start_height + layer_thickness ~ product_start_height + 2*layer_thickness
             # 以此类推
             layer_top_depth = product_start_height + current_layer * layer_thickness      # 当前层下边界（深）
-            layer_bottom_depth = product_start_height + (current_layer + 1) * layer_thickness   # 当前层上边界（浅）
+            layer_bottom_depth = product_start_height + (current_layer + 1) * product_height # layer_thickness   # 当前层上边界（浅）
             
             # 增加容差
             depth_tolerance = 0
@@ -1088,7 +1097,7 @@ class RGBDDetector:
         # 步骤1：创建深度边缘图
         max_depth = 1500
         roi_depth_clipped = roi_depth.copy()
-        roi_depth_clipped[roi_depth_clipped > max_depth] = 0
+        roi_depth_clipped[roi_depth_clipped > current_depth_max] = 0
         depth_normalized = roi_depth_clipped / 20
         depth_normalized = depth_normalized.astype(np.uint8)
         if debug == 1:
@@ -1096,18 +1105,24 @@ class RGBDDetector:
 
         # 方法1：深度图边缘检测
         # Canny边缘检测
-        thresh1 = 7
-        thresh2 = 30
+        thresh1 = self.feed_depth_thresh # 10
+        thresh2 = thresh1 * 3 # 30
         edges_depth = cv2.Canny(depth_normalized, thresh1, thresh2)
+        
+        kernel = np.ones((5, 1), np.uint8)
+        edges_depth = cv2.dilate(edges_depth, kernel, iterations=1)
 
         # 方法2：RGB图灰度边缘检测
         gray_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2GRAY)
         gray_img_roi = gray_img[roi_y_start:roi_y_end, roi_x_start:roi_x_end].copy()
-        
+
         # RGB图的Canny边缘
         thresh1_rgb = 50
         thresh2_rgb = 30
+        thresh3_rgb = 50 #100
         edges_rgb = cv2.Canny(gray_img_roi, thresh1_rgb, thresh2_rgb)
+        edges_rgb[roi_depth_clipped > current_depth_max] = 0
+        # edges_rgb[gray_img_roi < thresh3_rgb] = 0
 
         # 方法3：Sobel水平边缘检测（只保留水平方向的边缘）
         # 注意：Sobel算子计算的是梯度，需要进一步处理
@@ -1119,23 +1134,25 @@ class RGBDDetector:
         # 可选：形态学操作，连接断开的边缘
         kernel_horizontal = np.ones((1, 5), np.uint8)  # 水平方向的核，用于连接水平边缘
         sobely_thresh = cv2.morphologyEx(sobely_thresh, cv2.MORPH_CLOSE, kernel_horizontal)
-        
-        kernel = np.ones((5, 1), np.uint8)
-        edges = cv2.dilate(edges_depth, kernel, iterations=1)
+
         if debug == 1:
             cv2.imshow("edges_depth", edges_depth)
             cv2.imshow("gray_img_roi", gray_img_roi)
             cv2.imshow("edges_rgb", edges_rgb)
             cv2.imshow("sobely_thresh", sobely_thresh)
 
-        # ===================== 【核心修正】叠加多个边缘检测结果 =====================
-        # 方法1：取最大值（OR操作）
-        edges_combined = cv2.bitwise_or(edges_depth, edges_rgb)
-        edges_combined = cv2.bitwise_or(edges_combined, sobely_thresh)
-        
-        # 方法2：加权平均（可以根据需要调整权重）
-        # edges_combined = cv2.addWeighted(edges_depth, 0.5, edges_rgb, 0.5, 0)
-        # edges_combined = cv2.addWeighted(edges_combined, 0.7, sobely_thresh, 0.3, 0)
+        # ===================== 叠加多个边缘检测结果 =====================
+        use_rgb = 1
+        edges_combined = edges_depth
+        if use_rgb == 1: # 方法1：取最大值（OR操作）
+            edges_combined = cv2.bitwise_or(edges_depth, edges_rgb)
+            # edges_combined = cv2.bitwise_or(edges_combined, sobely_thresh)
+
+        elif use_rgb == 2: # 方法2：加权平均（可以根据需要调整权重）
+            edges_combined = cv2.addWeighted(edges_depth, 0.5, edges_rgb, 0.5, 0)
+            edges_combined = cv2.addWeighted(edges_combined, 0.7, sobely_thresh, 0.3, 0)
+
+        edges_combined[gray_img_roi < thresh3_rgb] = 0
 
         # 直线最小长度阈值
         minLineLength = roi_w * 0.1
@@ -1268,8 +1285,8 @@ class RGBDDetector:
                 print(f'center = {cx}, {cy}')
                 
                 avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset=15)
-                if avg_depth and avg_depth < 300:
-                    avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset=30)
+                # if avg_depth < 400:
+                #     avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset=30)
 
                 if avg_depth is None:
                     print(f'skip line for avg_depth is None')
@@ -1377,6 +1394,361 @@ class RGBDDetector:
                 y1 += sy
         
         return points
+
+    def _template_match_find_horizontal_line(self, depth_img, rgb_img):
+        """
+        基于模板匹配的产品边缘检测（支持深度图和RGB图）
+        
+        参数:
+            depth_img: 深度图（用于深度验证）
+            rgb_img: RGB图（用于RGB模板匹配）
+            
+        返回:
+            regions: 检测到的区域列表，格式与直线检测一致
+        """
+        regions = []
+        h, w = depth_img.shape
+        
+        # 深度图预处理
+        depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
+        depth_filtered = cv2.GaussianBlur(depth_filtered, (3,3), self.gaussian_sigma)
+        
+        # 限定ROI区域
+        roi_x_start = max(self.feed_roi_x, 0)
+        roi_x_end = min(self.feed_roi_x + self.feed_roi_w, w)
+        roi_y_start = max(self.feed_roi_y, 0)
+        roi_y_end = min(self.feed_roi_y + self.feed_roi_h, h)
+        
+        # ===================== 多层产品识别 =====================
+        product_height = self.product_height
+        product_width = self.product_width
+        interval_height = self.interval_height
+        product_start_height = self.product_start_height
+        
+        # 提取ROI深度区域
+        roi_depth = depth_filtered[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
+        
+        # 计算当前层深度范围
+        roi_valid_depths = roi_depth[(roi_depth != self.depth_invalid) & 
+                                     (roi_depth >= self.feed_depth_min) & 
+                                     (roi_depth >= self.product_start_height) & 
+                                     (roi_depth <= self.feed_depth_max)]
+        
+        current_layer = 0
+        current_depth_min = self.feed_depth_min
+        current_depth_max = self.feed_depth_max
+        
+        if len(roi_valid_depths) > 0:
+            # 获取最浅深度
+            roi_min_depth = np.min(roi_valid_depths)
+            print(f"ROI最浅深度: {roi_min_depth}mm")
+            
+            # 计算当前层
+            layer_thickness = product_height + interval_height
+            depth_offset = roi_min_depth - product_start_height
+            
+            if depth_offset < 0:
+                current_layer = 0
+            else:
+                current_layer = int(depth_offset // layer_thickness)
+            
+            # 计算当前层深度范围
+            layer_top_depth = product_start_height + current_layer * layer_thickness
+            layer_bottom_depth = product_start_height + (current_layer + 1) * product_height # layer_thickness
+            
+            current_depth_min = layer_top_depth
+            current_depth_max = layer_bottom_depth
+            
+            print(f"当前层: {current_layer + 1}, 深度范围: {current_depth_min:.1f} - {current_depth_max:.1f}mm")
+        
+        # ===================== 加载模板 =====================
+        template_depth = None
+        template_rgb = None
+        template_type = getattr(self, 'template_type', 'depth')  # 'depth' 或 'rgb'
+        template_path = getattr(self, 'template_path', None)
+        
+        if template_path is None or not os.path.exists(template_path):
+            print(f"模板文件不存在: {template_path}")
+            return regions
+        
+        # 根据模板类型加载
+        if template_type == 'depth':
+            # 加载深度图模板（16位）
+            template_depth = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
+            if template_depth is None or template_depth.dtype != np.uint16:
+                print(f"深度模板加载失败或格式不正确: {template_path}")
+                return regions
+            print(f"深度模板加载成功: {template_depth.shape}")
+        else:
+            # 加载RGB模板（8位）
+            template_rgb = cv2.imread(template_path)
+            if template_rgb is None:
+                print(f"RGB模板加载失败: {template_path}")
+                return regions
+            print(f"RGB模板加载成功: {template_rgb.shape}")
+        
+        # ===================== 模板匹配 =====================
+        # 提取ROI区域
+        roi_depth_roi = depth_filtered[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
+        rgb_roi = rgb_img[roi_y_start:roi_y_end, roi_x_start:roi_x_start + roi_x_end]
+        
+        # 存储匹配结果
+        matches = []
+        
+        if template_type == 'depth':
+            # ========== 深度图模板匹配 ==========
+            # 将16位深度图转换为8位用于匹配
+            template_depth_8u = self._depth_to_8u(template_depth)
+            roi_depth_8u = self._depth_to_8u(roi_depth_roi)
+            
+            # 方法1：直接模板匹配
+            result = cv2.matchTemplate(roi_depth_8u, template_depth_8u, cv2.TM_CCOEFF_NORMED)
+            
+            # 方法2：边缘特征匹配（推荐）
+            # thresh1 = 7
+            # thresh2 = 30
+            # edges_template = cv2.Canny(template_depth_8u, thresh1, thresh2)
+            # edges_roi = cv2.Canny(roi_depth_8u, thresh1, thresh2)
+            # result = cv2.matchTemplate(edges_roi, edges_template, cv2.TM_CCOEFF_NORMED)
+            
+            # 方法3：深度差匹配（如果模板有深度信息）
+            # 可以计算深度差图进行匹配
+            
+        else:
+            # ========== RGB图模板匹配 ==========
+            gray_template = cv2.cvtColor(template_rgb, cv2.COLOR_BGR2GRAY)
+            gray_roi = cv2.cvtColor(rgb_roi, cv2.COLOR_BGR2GRAY)
+            
+            # 方法1：原始灰度图匹配
+            # result = cv2.matchTemplate(gray_roi, gray_template, cv2.TM_CCOEFF_NORMED)
+            
+            # 方法2：边缘特征匹配（推荐）
+            edges_template = cv2.Canny(gray_template, 50, 150)
+            edges_roi = cv2.Canny(gray_roi, 50, 150)
+            result = cv2.matchTemplate(edges_roi, edges_template, cv2.TM_CCOEFF_NORMED)
+            
+            # 方法3：多尺度匹配（可选）
+            # matches = self._multi_scale_template_match(gray_roi, gray_template)
+        
+        # 获取匹配结果
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        template_threshold = getattr(self, 'template_threshold', 0.6)
+        
+        print(f"模板匹配分数: {max_val:.3f}")
+        # debug = 1
+        # if debug == 1:
+        #     cv2.imshow("edges_template", edges_template)
+        #     cv2.imshow("edges_roi", edges_roi)
+
+        if max_val < template_threshold:
+            print(f"模板匹配失败，分数 {max_val:.3f} < {template_threshold}")
+            return regions
+        
+        # 计算匹配位置
+        template_h, template_w = template_depth.shape[:2] if template_type == 'depth' else template_rgb.shape[:2]
+        match_x = max_loc[0] + roi_x_start
+        match_y = max_loc[1] + roi_y_start
+        
+        # 获取模板边缘偏移（抓取位置相对于模板顶部/底部的偏移）
+        template_edge_offset = getattr(self, 'template_edge_offset', template_h // 2)
+        
+        # 根据排序规则确定抓取边缘
+        if self.sort_rule == SortRule.SORT_BY_Y_ASC:
+            # 从上到下：抓取顶部边缘
+            edge_y = match_y + template_edge_offset
+        else:
+            # 从下到上：抓取底部边缘
+            edge_y = match_y + template_h - template_edge_offset
+        
+        # ===================== 深度验证 =====================
+        # 提取匹配区域内的深度信息
+        match_roi_depth = depth_filtered[match_y:match_y+template_h, match_x:match_x+template_w]
+        valid_depths = match_roi_depth[(match_roi_depth != self.depth_invalid) &
+                                        (match_roi_depth >= current_depth_min) &
+                                        (match_roi_depth <= current_depth_max)]
+        
+        if len(valid_depths) == 0:
+            print("匹配区域内无有效深度数据")
+            return regions
+        
+        avg_depth = np.median(valid_depths)
+        
+        # ===================== 多目标匹配（可选） =====================
+        # 如果需要匹配多个产品，可以使用非极大值抑制
+        max_matches = getattr(self, 'max_template_matches', 1)
+        if max_matches > 1:
+            matches = self._multi_template_match(result, template_w, template_h, 
+                                                  template_threshold, max_matches,
+                                                  roi_x_start, roi_y_start)
+        else:
+            matches = [(match_x, match_y, max_val)]
+        
+        # ===================== 构造region =====================
+        for i, (mx, my, score) in enumerate(matches[:max_matches]):
+            # 计算抓取边缘
+            if self.sort_rule == SortRule.SORT_BY_Y_ASC:
+                edge_y = my + template_edge_offset
+            else:
+                edge_y = my + template_h - template_edge_offset
+            
+            edge_center_point = (mx + template_w // 2, edge_y)
+            pixel_center = (mx + template_w // 2, my + template_h // 2)
+            
+            # 提取该匹配区域的深度
+            match_roi = depth_filtered[my:my+template_h, mx:mx+template_w]
+            valid_depths = match_roi[(match_roi != self.depth_invalid) &
+                                      (match_roi >= current_depth_min) &
+                                      (match_roi <= current_depth_max)]
+            
+            if len(valid_depths) == 0:
+                continue
+            
+            avg_depth = np.median(valid_depths)
+            
+            # 计算世界坐标
+            world_xyz = self._pixel2world(edge_center_point, avg_depth)
+            
+            # 添加抓取偏移
+            x, y, z = world_xyz
+            x += self.feed_offset_x
+            y += self.feed_offset_y
+            z += self.feed_offset_z
+            
+            region = {
+                "region_id": i + 1,
+                "pixel_center": pixel_center,
+                "edge_center_point": edge_center_point,
+                "world_xyz": (x, y, z),
+                "rotate_angle": 0.0,
+                "rotated_rect": None,
+                "bounding_rect": (mx, my, template_w, template_h),
+                "area": template_w * template_h,
+                "avg_depth": avg_depth,
+                "layer": current_layer,
+                "line_y_avg": edge_y,
+                "line_points": [(mx, edge_y), (mx + template_w, edge_y)],
+                "color": self._get_color_by_layer(current_layer),
+                "match_score": score,
+                "match_type": template_type
+            }
+            
+            regions.append(region)
+        
+        # 排序
+        self._sort_regions(regions)
+        
+        print(f"模板匹配成功，找到 {len(regions)} 个目标")
+        
+        # 保存用于显示结果
+        self.detected_regions = regions
+        
+        return regions
+    
+    def _depth_to_8u(self, depth_16u, depth_min=None, depth_max=None):
+        """将16位深度图转换为8位灰度图"""
+        depth_16u = depth_16u.copy()
+        
+        # 过滤无效深度
+        valid_depth = depth_16u[(depth_16u != 0) & (depth_16u < 65535)]
+        
+        if len(valid_depth) == 0:
+            return np.zeros(depth_16u.shape[:2], dtype=np.uint8)
+        
+        if depth_min is None:
+            depth_min = np.percentile(valid_depth, 2)
+        if depth_max is None:
+            depth_max = np.percentile(valid_depth, 98)
+        
+        if depth_max <= depth_min:
+            depth_max = depth_min + 1
+        
+        depth_16u = np.clip(depth_16u, depth_min, depth_max)
+        depth_8u = ((depth_16u - depth_min) / (depth_max - depth_min) * 255).astype(np.uint8)
+        
+        return depth_8u
+    
+    def _multi_template_match(self, result, template_w, template_h, threshold, max_matches, roi_x_start, roi_y_start):
+        """多目标模板匹配（使用非极大值抑制）"""
+        matches = []
+        h, w = result.shape
+        
+        # 复制结果矩阵
+        result_copy = result.copy()
+        
+        for _ in range(max_matches):
+            # 找到最大值位置
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result_copy)
+            
+            if max_val < threshold:
+                break
+            
+            # 计算实际图像坐标
+            match_x = max_loc[0] + roi_x_start
+            match_y = max_loc[1] + roi_y_start
+            
+            matches.append((match_x, match_y, max_val))
+            
+            # 抑制该区域周围的匹配
+            # 在结果矩阵中，将当前匹配区域周围的值设为最小值
+            x_start = max(0, max_loc[0] - template_w // 2)
+            x_end = min(w, max_loc[0] + template_w // 2)
+            y_start = max(0, max_loc[1] - template_h // 2)
+            y_end = min(h, max_loc[1] + template_h // 2)
+            
+            result_copy[y_start:y_end, x_start:x_end] = 0
+        
+        return matches
+    
+    def _multi_scale_template_match(self, gray_roi, gray_template):
+        """多尺度模板匹配"""
+        scales = [0.8, 0.9, 1.0, 1.1, 1.2]
+        best_match = None
+        best_score = -1
+        
+        for scale in scales:
+            # 缩放模板
+            new_w = int(gray_template.shape[1] * scale)
+            new_h = int(gray_template.shape[0] * scale)
+            
+            if new_w > gray_roi.shape[1] or new_h > gray_roi.shape[0]:
+                continue
+            
+            scaled_template = cv2.resize(gray_template, (new_w, new_h))
+            
+            # 匹配
+            result = cv2.matchTemplate(gray_roi, scaled_template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+            
+            if max_val > best_score:
+                best_score = max_val
+                best_match = (max_loc, new_w, new_h, scale)
+        
+        return best_match, best_score
+
+    def _get_product_template(self):
+        """
+        获取产品模板
+        
+        可以从配置文件加载，也可以从图像中学习
+        """
+        # 方法1：从文件加载
+        if hasattr(self, 'template_path') and os.path.exists(self.template_path):
+            template = cv2.imread(self.template_path, cv2.IMREAD_GRAYSCALE)
+            if template is not None:
+                return template
+        
+        # 方法2：使用配置的模板尺寸创建默认模板
+        template_w = getattr(self, 'template_width', 100)
+        template_h = getattr(self, 'template_height', 50)
+        
+        # 创建一个矩形模板（边缘特征）
+        template = np.zeros((template_h, template_w), dtype=np.uint8)
+        # 绘制矩形边缘（用于边缘匹配）
+        cv2.rectangle(template, (0, 0), (template_w-1, template_h-1), 255, 2)
+        # 添加一些内部特征
+        cv2.line(template, (0, template_h//2), (template_w-1, template_h//2), 255, 1)
+        
+        return template
 
     # ===================== 【新增】物料缓存台检测算法 =====================
     def _material_check(self, depth_img):
@@ -1839,11 +2211,19 @@ class RGBDDetector:
         status_text = "EXIST" if exists_flag == DetectStatus.EXIST else "NOTHING"
         status_color = (0,255,0) if exists_flag == DetectStatus.EXIST else (0,0,255)
         cv2.putText(draw_img, f"STATUS: {status_text}", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
+        
         # 检测类型
-        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron" }
+        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron"}
         cv2.putText(draw_img, f"TYPE: {type_dict[ptype]}", (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+        
+        # 绘制坐标信息
         coord_text = f"X:{x:.1f} Y:{y:.1f} Z:{z:.1f} R:{r:.1f}"
         cv2.putText(draw_img, coord_text, (20,110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+
+        # 显示检测到的区域数量
+        if len(self.detected_regions) > 0:
+            cv2.putText(draw_img, f"Regions: {len(self.detected_regions)}", (20,150), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,0), 2)
 
         # 2. 绘制对应ROI框
         roi_info = {
@@ -1863,42 +2243,79 @@ class RGBDDetector:
             cv2.putText(draw_img, roi_name, (roi_start[0]+5, roi_start[1]+20), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, roi_color, 2)
 
-        # 3. 绘制所有检测到的直线和旋转矩形（仅上料检测）
+        # 3. 绘制所有检测到的区域（上料检测）
         if ptype == PType.FEED_CHECK and len(self.detected_regions) > 0:
-            # 绘制所有直线
             for i, region in enumerate(self.detected_regions):
                 color = region.get("color", (0,255,0))
                 
-                # 绘制直线
-                (x1, y1), (x2, y2) = region["line_points"]
-                cv2.line(draw_img, (x1, y1), (x2, y2), color, 3)
-                
-                # 绘制端点
-                cv2.circle(draw_img, (x1, y1), 4, (255,255,255), -1)
-                cv2.circle(draw_img, (x2, y2), 4, (255,255,255), -1)
-                
-                # 标注直线序号
-                mid_x = (x1 + x2) // 2
-                mid_y = (y1 + y2) // 2
-                cv2.putText(draw_img, f"L{i+1}", (mid_x-10, mid_y-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                
-                # 绘制旋转矩形
-                if "rotated_rect" in region:
+                # 绘制产品边界框（如果有旋转矩形）
+                if "rotated_rect" in region and region["rotated_rect"] is not None:
                     box = cv2.boxPoints(region["rotated_rect"])
                     box = np.int32(box)
-                    cv2.drawContours(draw_img, [box], 0, color, 1)
+                    cv2.drawContours(draw_img, [box], 0, color, 2)
+                elif "line_points" in region and len(region["line_points"]) == 2:
+                    # 绘制直线（兼容旧格式）
+                    (x1, y1), (x2, y2) = region["line_points"]
+                    cv2.line(draw_img, (x1, y1), (x2, y2), color, 3)
+                    
+                    # 绘制端点
+                    cv2.circle(draw_img, (x1, y1), 4, (255,255,255), -1)
+                    cv2.circle(draw_img, (x2, y2), 4, (255,255,255), -1)
+                
+                # 绘制产品矩形框（如果有外接矩形）
+                if "bounding_rect" in region:
+                    x, y, w, h = region["bounding_rect"]
+                    cv2.rectangle(draw_img, (x, y), (x+w, y+h), color, 2)
+                
+                # 绘制抓取边缘线（高亮）
+                edge_y = region.get("line_y_avg", 0)
+                if edge_y > 0:
+                    line_x1 = region["pixel_center"][0] - self.product_width // 2
+                    line_x2 = region["pixel_center"][0] + self.product_width // 2
+                    cv2.line(draw_img, (line_x1, int(edge_y)), (line_x2, int(edge_y)), (0,255,255), 2)
+                    cv2.putText(draw_img, "GRIP EDGE", (line_x1, int(edge_y)-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
+                
+                # 标注区域序号和层信息
+                mid_x = region["pixel_center"][0]
+                mid_y = region["pixel_center"][1]
+                cv2.putText(draw_img, f"R{i+1}", (mid_x-15, mid_y-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                # 显示层信息
+                layer = region.get("layer", 0)
+                cv2.putText(draw_img, f"L{layer+1}", (mid_x-15, mid_y+15), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                
+                # 显示匹配分数（如果是模板匹配）
+                if "match_score" in region:
+                    cv2.putText(draw_img, f"Score:{region['match_score']:.2f}", 
+                               (mid_x-15, mid_y+30), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
                 
                 # 绘制中心点
                 cx, cy = region["pixel_center"]
                 cv2.circle(draw_img, (cx, cy), 5, color, -1)
+                
+                # 绘制深度信息
+                depth_text = f"D:{region['avg_depth']:.0f}mm"
+                cv2.putText(draw_img, depth_text, (cx+40, cy-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
             
-            # 特别标注第一条直线（主检测结果）
+            # 特别标注主检测结果（根据配置的索引）
             if len(self.detected_regions) > 0:
-                feed_edge_index = min(self.feed_edge_index, len(self.detected_regions)-1)
+                feed_edge_index = min(getattr(self, 'feed_edge_index', 0), len(self.detected_regions)-1)
                 main_region = self.detected_regions[feed_edge_index]
-                (x1, y1), (x2, y2) = main_region["line_points"]
-                cv2.line(draw_img, (x1, y1), (x2, y2), (255,255,255), 2)
+                
+                # 高亮主检测区域
+                if "rotated_rect" in main_region and main_region["rotated_rect"] is not None:
+                    box = cv2.boxPoints(main_region["rotated_rect"])
+                    box = np.int32(box)
+                    cv2.drawContours(draw_img, [box], 0, (255,255,255), 3)
+                
+                if "line_points" in main_region:
+                    (x1, y1), (x2, y2) = main_region["line_points"]
+                    cv2.line(draw_img, (x1, y1), (x2, y2), (255,255,255), 2)
+                
                 cv2.putText(draw_img, "MAIN", (x1-10, y1-10), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
@@ -1918,28 +2335,18 @@ class RGBDDetector:
             
             # 计算每层的理论坐标
             for layer_idx in range(self.unload_layer_count):
-                total_width = self.unload_item_count_per_layer * self.unload_item_width + \
-                              (self.unload_item_count_per_layer - 1) * self.unload_item_interval
-                # start_x = roi_x_start + (roi_x_end - roi_x_start - total_width) // 2
-                # start_y = roi_y_start + (self.unload_roi_h // 2) + layer_idx * 20  # 分层显示
                 start_x = roi_x_start
                 start_y = roi_y_start
-
-                # 绘制该层所有产品位置
+                
                 for item_idx in range(self.unload_item_count_per_layer):
-                    # item_x = start_x + item_idx * (self.unload_item_width + self.unload_item_interval) + self.unload_item_width // 2
-                    # item_y = start_y
                     item_x = start_x
                     item_y = start_y + item_idx * (self.unload_item_height + self.unload_item_interval)
-
+                    
                     # 绘制位置框
                     cv2.rectangle(draw_img, 
-                                #  (item_x - self.unload_item_width//2, item_y - 10),
-                                #  (item_x + self.unload_item_width//2, item_y + 10),
                                  (item_x, item_y),
                                  (item_x + self.unload_item_width, item_y + self.unload_item_height),
                                  (255,255,0), 1)
-                    # 标注层号和物品索引
                     cv2.putText(draw_img, f"L{layer_idx} I{item_idx}", (item_x-20, item_y-15), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
             
@@ -1950,6 +2357,13 @@ class RGBDDetector:
                 cv2.circle(draw_img, (target_x, target_y), 8, (0,0,255), -1)
                 cv2.putText(draw_img, "TARGET", (target_x+10, target_y), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+
+        # 6. 绘制图例
+        legend_y = draw_img.shape[0] - 80
+        cv2.putText(draw_img, "Legend:", (20, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+        cv2.putText(draw_img, "Red: ROI", (20, legend_y+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
+        cv2.putText(draw_img, "Green/Yellow: Detected Region", (20, legend_y+35), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
+        cv2.putText(draw_img, "Yellow Line: Grip Edge", (20, legend_y+50), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,255), 1)
 
         return draw_img
 
@@ -1997,6 +2411,8 @@ def get_rgb_filename(depth_filename):
     
     return str(rgb_path) if rgb_path.exists() else None
 
+from src.depthSegmentPython import DetectionStatistics
+
 if __name__ == "__main__":
     detector = RGBDDetector()
     product_no = "M001"
@@ -2006,21 +2422,18 @@ if __name__ == "__main__":
         exit(-1)
     print("初始化成功！")
 
-    depth_filename = "data/depth_image.png"
-    depth_filename = "data/depth_image1.png"
-    depth_filename = "data/depth_1768713398274.png"
-    depth_filename = "data/depth_1768813732047.png"
-    depth_filename = "data/20260123/depth_1769134430866.png"
+    # depth_filename = "data/20260123/depth_1769134430866.png"
     
     # 默认rgb图像
     # rgb_img = cv2.imread("./rgb_image.png")
     # rgb_img = cv2.imread("data/20260123/rgb_1769134430866.jpg")
 
     # 获取所有PNG文件
-    image_folder = "data/20260319"
+
+    image_folder = "data/20260409"
     image_files = list(Path(image_folder).glob("*.png"))
 
-    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260319"
+    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260409"
 
     image_files = list(camera_img_folder.glob("*.png"))
     print(image_files)
@@ -2034,11 +2447,15 @@ if __name__ == "__main__":
     output_folder = image_folder + "_result"
     os.makedirs(output_folder, exist_ok=True)
 
+    # ===================== 初始化统计类 =====================
+    stats = DetectionStatistics.DetectionStatistics()
+    stats.set_total_files(len(image_files))
+
     for i, image_file in enumerate(image_files):
-        # if i < 131:
-        #     continue
-        if image_file.name.startswith("detect_result_horizontal_line_"):
+        if image_file.name.startswith("detect_result_horizontal_line"):
             continue
+        # if i < 81:
+        #     continue
         print(f"\n处理文件 {i+1}/{len(image_files)}: {image_file.name}")
         depth_filename = str(image_file)
         depth_img = cv2.imread(depth_filename, cv2.IMREAD_UNCHANGED)
@@ -2069,17 +2486,43 @@ if __name__ == "__main__":
         # ptype = PType.UNLOAD_CHECK
         detect_res = detector.detect(ptype, rgb_img, depth_img)
         print("检测结果:\n", json.dumps(detect_res, ensure_ascii=False, indent=2))
-        print(f"\n处理文件 {i + 1}/{len(image_files)}: {image_file.name} done...")
+
+        # 记录结果
+        if detect_res["code"] == 0 and detect_res["result"]["exists"] == DetectStatus.EXIST:
+            coords = detect_res["result"]["coords"]
+            stats.add_success(image_file.name, coords)
+            print(f"检测成功: X={coords[0]:.2f}, Y={coords[1]:.2f}, Z={coords[2]:.2f}, R={coords[3]:.2f}")
+        else:
+            err_msg = detect_res.get('err_msg', '检测失败')
+            print(f"检测失败: {err_msg}")
+            stats.add_failure(image_file.name, err_msg)
+
         depth_color = detector.depth_pseudo_color(depth_img)
 
         result_img = detector.draw_result_with_rotated_box(depth_color, detect_res)
         cv2.imshow("result-line", result_img)
         # file_name = depth_filename.rsplit('.', 1)[0] + "_result.jpg"
         file_name = os.path.join(output_folder, f"{image_file.stem}_result.jpg")
-        cv2.imwrite(file_name, result_img)
+        # cv2.imwrite(file_name, result_img)
 
-        cv2.waitKey(0)
+        if True: # ===================== 输出统计结果 =====================
+            # stats.print_summary()
+            # 保存统计结果
+            # stats.save_statistics(output_folder)
+            # 绘制分布图
+            # stats.plot_distribution(output_folder)
+            # 获取中位数和平均值
+            median_coords = stats.get_median_coords()
+            mean_coords = stats.get_mean_coords()
+            
+            if median_coords:
+                print(f"中位数坐标: X={median_coords['x']:.2f}, Y={median_coords['y']:.2f}, "
+                    f"Z={median_coords['z']:.2f}, R={median_coords['r']:.2f}")
+                print(f"平均值坐标: X={mean_coords['x']:.2f}, Y={mean_coords['y']:.2f}, "
+                    f"Z={mean_coords['z']:.2f}, R={mean_coords['r']:.2f}")
 
-
+        key = cv2.waitKey(0)
+        if key == 27:
+            break
 
     cv2.destroyAllWindows()

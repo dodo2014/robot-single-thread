@@ -272,7 +272,7 @@ class DetectAlgoService:
         results = []
         for idx in range(number):
             if idx < 7:  # 运动到点位之后立即拍照，图像深度不稳定，前7次只触发拍照，不处理
-                self.execute_detection(ptype, idx)
+                self.execute_detection(ptype, detect=0)
             else:
                 result = self.execute_detection(ptype, detect=1)
                 print(f"result is : {result}")
@@ -289,30 +289,35 @@ class DetectAlgoService:
         if len(results) == 0:
             return {"code":-99, "err_msg":f"检测异常: 中位数处理返回空数组"}
 
+        # 上下料，y, z取中位数，r取平均值
         if ptype in (const.photo_type_loading, const.photo_type_unloading):
-            sorted_result = sorted(
+            n = len(results)
+            mid = n // 2
+
+            sorted_y_result = sorted(
+                results,
+                key=lambda x: x["result"]["coords"][1]  # x代表每个item，取z值（索引2）
+            )
+            y_midian = sorted_y_result[mid] if n % 2 == 1 else (sorted_y_result[mid - 1] + sorted_y_result[mid]) / 2
+
+            sorted_z_result = sorted(
                 results,
                 key=lambda x: x["result"]["coords"][2]  # x代表每个item，取z值（索引2）
             )
-            print(f"sorted result len :{len(sorted_result)}, result: {sorted_result}")
+            z_midian = sorted_z_result[mid] if n % 2 == 1 else (sorted_z_result[mid - 1] + sorted_z_result[mid]) / 2
 
-            z_values = [item['result']['coords'][2] for item in sorted_result]
-            z_average = sum(z_values) / len(z_values)
-
-            r_values = [item['result']['coords'][3] for item in sorted_result]
+            r_values = [item['result']['coords'][3] for item in sorted_z_result]
             r_average = sum(r_values) / len(r_values)
 
-            midian_result = sorted_result[int(len(sorted_result)/2)]
+            midian_result = sorted_y_result[mid]
+            midian_result["result"]["coords"][1] = y_midian
+            midian_result["result"]["coords"][2] = z_midian
             midian_result["result"]["coords"][3] = r_average
-            # midian_result["result"]["coords"][2] = z_average
 
-            print(int(len(sorted_result)/2))
-            print(get_logs_dir())
             with open(f"{get_logs_dir()}/detect_algo.log", "a+") as f:
-                for item in sorted_result:
+                for item in sorted_z_result:
                     f.write(f"{item}\n")
                 f.write(f"midian_result: {midian_result}\n")
-
 
             return midian_result
 

@@ -1331,16 +1331,16 @@ class Controller(QThread):
             depth = float('inf')
             if res_status == "ok" and coords:
                 depth = coords[0][2]
-                logger.info(f"  -> 第 {col} 列检测到物料，深度 Zc = {depth:.1f} mm")
+                logger.info(f"  -> 第 {col + 1} 列检测到物料，深度 Zc = {depth:.1f} mm")
             else:
-                logger.info(f"  -> 第 {col} 列视野为空")
+                logger.info(f"  -> 第 {col + 1} 列视野为空")
 
             col_depths.append(depth)
 
         # ==========================================
         # 3. 核心优化：按“层”过滤，而不是绝对深度
         # ==========================================
-        # LAYER_GAP = 147.0 + 30.0  # 177.0 mm (物料 + 木条)
+        # 每层高度，LAYER_GAP = 147.0 + 30.0  # 177.0 mm (物料 + 木条)
         LAYER_GAP = const.product_height + const.interval_height  # 177.0 mm (物料 + 木条)
         # BASE_DEPTH = 440.0  # 首层标准深度
         BASE_DEPTH = const.base_depth  # 首层标准深度
@@ -2264,7 +2264,7 @@ class Controller(QThread):
 
         points.extend(process_points)
         # 执行运动控制
-        # logger.info(f"---> 阶段 1: 优先前往安全固定点: {process_points} <---")
+        logger.info(f"---> 阶段 1: 优先前往安全固定点: {process_points} <---")
         ps_success = self.execute_standard_motion_sequence(
             process_addr,
             points,
@@ -2364,7 +2364,7 @@ class Controller(QThread):
         way_point_down = self.move_up_down(way_point_forward, -100)
 
         # points = [process_start_point, way_point_up, way_point_forward, way_point_down]
-        points = [process_start_point, wp1, wp2, wp3]
+        points = [process_start_point, wp1, wp2]
 
         """
         # 1、从实时点移动到目标点后面50mm处
