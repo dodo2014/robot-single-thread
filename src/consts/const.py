@@ -105,12 +105,13 @@ photo_type_loading = 2 # 上料
 photo_type_unloading = 3 # 下料
 photo_type_aluminum = 4  # 铝屑识别
 
-# 物料参数
+# 上料区物料参数
 product_height = 117  # 单个产品的高度
 interval_height = 15  # 层与层之间间隔木条的高度（mm）
 base_depth = 320 # 首层标准深度，最上层拍照位，深度相机与物料的距离,低于这个值，物料上沿的深度会丢失
-product_cols_each_layer = 5 # 每层的物料数量
+product_cols_per_layer = 5 # 每层的物料数量
 product_total_layers = 2 # 物料的总层数
+tolerange = 30.0 # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8 # 200

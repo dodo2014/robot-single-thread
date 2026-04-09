@@ -16,6 +16,7 @@ import os
 import traceback
 import copy
 import socket
+import math
 
 
 class Controller(QThread):
@@ -1301,90 +1302,109 @@ class Controller(QThread):
 
     def scan_rack_depth_mapping(self, process_addr, search_points, config, loading, photo_type):
         """
-        料架顶层扫描映射：遍历最上层5个点，寻找最上层、最左侧(或最先排序)的物料
-        返回: 目标点位在 search_points 数组中的精确 Index，若全空则返回 -1
+        料架顶层扫描映射 (记忆跃进版)
+        利用记忆索引直接跳过已清空的上方楼层，极大提升开机恢复效率
         """
         logger.info("========================================")
-        logger.info("开始执行料架初始化映射扫描 (Pallet Mapping)...")
+        logger.info("开始执行料架映射扫描 (Smart Pallet Mapping)...")
+
+        COLS_PER_LAYER = const.product_cols_per_layer
+        # 每一层的固定落差
+        LAYER_GAP = const.product_height + const.interval_height  # 177.0 mm (物料 + 木条)
+        BASE_DEPTH = const.base_depth
+        MAX_RELIABLE_DEPTH = BASE_DEPTH + LAYER_GAP + const.tolerange
+
+        total_points = len(search_points)
+        total_layers = math.ceil(total_points / COLS_PER_LAYER)
+
+        # ========================================================
+        # 【核心优化】：计算起始扫描层
+        # ========================================================
+        # 假设当前索引是 12，那么 12 // 5 = 2，直接从第 2 层开始扫
+        # 如果是新料车（索引被重置为0），0 // 5 = 0，从第 0 层开始扫
+        current_idx = self.loading_index.current_search_index
+        start_layer_idx = current_idx // COLS_PER_LAYER
+
+        # 容错：防止由于配置变动导致层数越界
+        start_layer_idx = max(0, min(start_layer_idx, total_layers - 1))
+
+        logger.info(f"根据记忆索引 [{current_idx}]，智能跳过上方空层，直接从第 {start_layer_idx} 层开始扫描")
         logger.info("========================================")
 
-        # 只取前 5 个点 (最顶层)
-        # top_layer_points = search_points[:5]
-        top_layer_points = search_points[:const.product_cols_each_layer]
-        col_depths = []
-
-        for col, pt in enumerate(top_layer_points):
+        # === 外层循环：从 start_layer_idx 开始逐层下探 ===
+        for layer_idx in range(start_layer_idx, total_layers):
             if self.check_estop(): return -1
 
-            logger.info(f"映射扫描列[{col + 1}/5]: 前往 {pt['name']} ...")
+            logger.info(f"--- 开始扫描第 {layer_idx} 层高度视野 ---")
 
-            # 1. 移动到顶层扫描点
-            if not self._move_segment_to_target(process_addr, target_point=pt):
-                return -1
+            # 提取当前层需要扫描的 5 个点
+            start_idx = layer_idx * COLS_PER_LAYER
+            end_idx = min(start_idx + COLS_PER_LAYER, total_points)
+            current_layer_points = search_points[start_idx:end_idx]
 
-            # 2. 拍照获取深度
-            result = self.take_photo_position(pt.get("coords"), config, loading, photo_type)
-            res_status = result.get("res", "error")
-            coords = result.get("coords", [])
+            col_depths = []
 
-            # 记录深度，空料设为正无穷大
-            depth = float('inf')
-            if res_status == "ok" and coords:
-                depth = coords[0][2]
-                logger.info(f"  -> 第 {col + 1} 列检测到物料，深度 Zc = {depth:.1f} mm")
+            # === 内层循环：扫描该层的 5 列 ===
+            for col, pt in enumerate(current_layer_points):
+                if self.check_estop(): return -1
+
+                logger.info(f"映射扫描: 前往 {pt['name']} ...")
+
+                # 移动并拍照...
+                if not self._move_segment_to_target(process_addr, target_point=pt):
+                    return -1
+
+                result = self.take_photo_position(pt.get("coords"), config, loading, photo_type)
+                res_status = result.get("res", "ng")
+                coords = result.get("coords", [])
+
+                depth = float('inf')
+                if res_status == "ok" and coords:
+                    depth = coords[0][2]
+                    logger.info(f"  -> 第 {col} 列检测到物料，深度 Zc = {depth:.1f} mm")
+                else:
+                    logger.info(f"  -> 第 {col} 列视野为空")
+
+                col_depths.append(depth)
+
+            # === 分析当前层的扫描结果 ===
+            min_depth = min(col_depths)
+
+            if min_depth <= MAX_RELIABLE_DEPTH:
+                valid_items = []
+                for col, depth in enumerate(col_depths):
+                    if depth <= MAX_RELIABLE_DEPTH:
+                        # 相对层数计算
+                        relative_layer = round((depth - BASE_DEPTH) / LAYER_GAP)
+
+                        # 绝对层数 = 当前扫描层 + 相对层数
+                        absolute_layer = layer_idx + relative_layer
+                        absolute_layer = max(0, min(absolute_layer, total_layers - 1))
+                        valid_items.append((col, absolute_layer, depth))
+
+                if valid_items:
+                    min_abs_layer = min(item[1] for item in valid_items)
+                    items_in_top_layer = [item for item in valid_items if item[1] == min_abs_layer]
+
+                    best_item = items_in_top_layer[0]
+                    best_col = best_item[0]
+                    best_abs_layer = best_item[1]
+                    best_depth = best_item[2]
+
+                    target_index = best_abs_layer * COLS_PER_LAYER + best_col
+
+                    logger.info("========================================")
+                    logger.info(f"映射成功！锁定目标：第 {best_abs_layer} 层，第 {best_col} 列")
+                    logger.info(f"推算总列表索引为 [{target_index}]")
+                    logger.info("========================================")
+
+                    return target_index
+
             else:
-                logger.info(f"  -> 第 {col + 1} 列视野为空")
+                logger.warning(f"第 {layer_idx} 层扫描未发现近距离物料，准备下探...")
 
-            col_depths.append(depth)
-
-        # ==========================================
-        # 3. 核心优化：按“层”过滤，而不是绝对深度
-        # ==========================================
-        # 每层高度，LAYER_GAP = 147.0 + 30.0  # 177.0 mm (物料 + 木条)
-        LAYER_GAP = const.product_height + const.interval_height  # 177.0 mm (物料 + 木条)
-        # BASE_DEPTH = 440.0  # 首层标准深度
-        BASE_DEPTH = const.base_depth  # 首层标准深度
-
-        valid_items = []  # 存放 (列号, 层号, 实际深度)
-        max_layer_index = const.product_total_layers - 1
-
-        for col, depth in enumerate(col_depths):
-            if depth != float('inf'):
-                # 根据深度推算层号，round 可以完美过滤几毫米甚至几十毫米的视觉误差
-                layer = round((depth - BASE_DEPTH) / LAYER_GAP)
-                # 容错：限定在 0~6 层之间
-                layer = max(0, min(layer, max_layer_index))
-
-                valid_items.append((col, layer, depth))
-
-        if not valid_items:
-            logger.critical("映射失败：整个料架视野内未发现任何物料！")
-            return -1
-
-        # 4. 寻找最上方的层 (层号最小)
-        min_layer = min(item[1] for item in valid_items)
-
-        # 5. 提取所有处于这“最上一层”的物料
-        items_in_top_layer = [item for item in valid_items if item[1] == min_layer]
-
-        # 6. 在最上层中，选择最靠前的一列 (列号最小)
-        # 因为 valid_items 本身就是按 col 0->4 顺序追加的，所以直接取第一个即可
-        best_item = items_in_top_layer[0]
-
-        best_col = best_item[0]
-        best_layer = best_item[1]
-        best_depth = best_item[2]
-
-        # 7. 计算在 35 个点数组中的绝对索引
-        # 公式：层数 * 每层数量 + 列号
-        target_index = best_layer * const.product_cols_each_layer + best_col
-
-        logger.info("========================================")
-        logger.info(f"映射完成！锁定第 {best_layer} 层，第 {best_col} 列")
-        logger.info(f"实测深度 {best_depth:.1f}mm，推算总列表索引为 [{target_index}]")
-        logger.info("========================================")
-
-        return target_index
+        logger.critical("映射失败：所有高度层扫描完毕，料架已完全空载！")
+        return -1
 
     def _wait_for_udp_response(self, sock, expected_msg="OK", timeout_sec=30.0):
         """
