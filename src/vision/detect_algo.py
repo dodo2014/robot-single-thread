@@ -298,18 +298,20 @@ class DetectAlgoService:
                 results,
                 key=lambda x: x["result"]["coords"][1]  # x代表每个item，取z值（索引2）
             )
-            y_midian = sorted_y_result[mid] if n % 2 == 1 else (sorted_y_result[mid - 1] + sorted_y_result[mid]) / 2
+            y_result = [item['result']['coords'][1] for item in sorted_y_result]
+            y_midian = y_result[mid] if n % 2 == 1 else (y_result[mid - 1] + y_result[mid]) / 2
 
             sorted_z_result = sorted(
                 results,
                 key=lambda x: x["result"]["coords"][2]  # x代表每个item，取z值（索引2）
             )
-            z_midian = sorted_z_result[mid] if n % 2 == 1 else (sorted_z_result[mid - 1] + sorted_z_result[mid]) / 2
+            z_result = [item['result']['coords'][2] for item in sorted_z_result]
+            z_midian = z_result[mid] if n % 2 == 1 else (z_result[mid - 1] + z_result[mid]) / 2
 
             r_values = [item['result']['coords'][3] for item in sorted_z_result]
             r_average = sum(r_values) / len(r_values)
 
-            midian_result = sorted_y_result[mid]
+            midian_result = sorted_z_result[mid]
             midian_result["result"]["coords"][1] = y_midian
             midian_result["result"]["coords"][2] = z_midian
             midian_result["result"]["coords"][3] = r_average
@@ -347,6 +349,37 @@ class DetectAlgoService:
         logger.info("Algorithm updated.")
 
 
+def get_midian(results):
+    n = len(results)
+    mid = n // 2
+
+    sorted_y_result = sorted(
+        results,
+        key=lambda x: x["result"]["coords"][1]  # x代表每个item，取z值（索引2）
+    )
+    print(f"sorted y result : {sorted_y_result}")
+    y_result = [item['result']['coords'][1] for item in sorted_y_result]
+    print(f"sorted y : {y_result}")
+    y_midian = y_result[mid] if n % 2 == 1 else (y_result[mid - 1] + y_result[mid]) / 2
+    print(f"y midian: {y_midian}")
+
+    sorted_z_result = sorted(
+        results,
+        key=lambda x: x["result"]["coords"][2]  # x代表每个item，取z值（索引2）
+    )
+    z_result = [item['result']['coords'][2] for item in sorted_z_result]
+    z_midian = z_result[mid] if n % 2 == 1 else (z_result[mid - 1] + z_result[mid]) / 2
+
+    r_values = [item['result']['coords'][3] for item in sorted_z_result]
+    r_average = sum(r_values) / len(r_values)
+
+    midian_result = sorted_z_result[mid]
+    midian_result["result"]["coords"][1] = y_midian
+    midian_result["result"]["coords"][2] = z_midian
+    midian_result["result"]["coords"][3] = r_average
+
+    print(midian_result)
+
 def main():
     # 初始化业务类
     service = DetectAlgoService(product_no="M001")
@@ -381,6 +414,27 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    # results = [
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [0.0, 0.0, 0.0, 0.0], 'exists': 2}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 17.85, 320, -0.5100000000000051], 'exists': 1},
+    #      'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -5.22, 320, 0.91], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [0.0, 0.0, 0.0, 0.0], 'exists': 2}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -2.61, 320, 3.37], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 9.58, 320, 4.11], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 17.85, 320, 2.38], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -3.48, 320, 2.23], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 16.11, 320, 2.31], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -6.53, 320, 2.39], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -4.35, 320, 0.89], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [0.0, 0.0, 0.0, 0.0], 'exists': 2}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.2, -4.37, 321, 0.54], 'exists': 1}, 'err_msg': ''},
+    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 16.54, 320, -1.1099999999999994], 'exists': 1},
+    #      'err_msg': ''},
+    # ]
+    # print(get_midian(results))
+
     # dev = OrbbecCameraDevice()
     # success, msg = dev.connect()
     # if success:

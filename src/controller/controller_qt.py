@@ -855,11 +855,12 @@ class Controller(QThread):
                 return {"res": "error", "coords": [], "trigger": ""}
 
         except Exception as e:
-            logger.info(f"take photo position error: {e}")
+            logger.info(f"take photo position error: {e}, traceback: {traceback.format_exc()}")
+
 
         return {"res": "error", "coords":[], "trigger": ""}
 
-    def save_vision_data(self, process_addr, coords_list):
+    def save_vision_data(self, process_addr, coords_list, photo_type=None):
         """
         保存视觉坐标数据
         :param process_addr: 动作地址 (int)，如 0x4008C
@@ -867,8 +868,15 @@ class Controller(QThread):
         """
         key = hex(process_addr)  # 转成字符串 "0x4008c" 作为 Key
 
+        # 校验photo_type
+        if photo_type is None or photo_type not in const.PHOTO_TYPE_DESC:
+            logger.warning(f"保存失败：无效的photo_type={photo_type}")
+            return
+
         # 1. 更新内存
-        self.vision_data_cache[key] = coords_list
+        if key not in self.vision_data_cache:
+            self.vision_data_cache[key] = {}
+        self.vision_data_cache[key][photo_type] = coords_list
 
         # 2. 更新文件 (全量保存，防止覆盖其他动作的数据)
         try:
@@ -881,8 +889,13 @@ class Controller(QThread):
                     except json.JSONDecodeError:
                         pass
 
+            # 确保顶层key存在
+            if key not in current_data:
+                current_data[key] = {}
+
             # 更新当前动作的数据
-            current_data[key] = {
+            current_data[key][str(photo_type)] = {
+                "desc": const.PHOTO_TYPE_DESC[photo_type],
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "coords": coords_list
             }
@@ -891,12 +904,13 @@ class Controller(QThread):
             with open(VISION_DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(current_data, f, indent=4, ensure_ascii=False)
 
-            logger.info(f"视觉数据已保存至 {VISION_DATA_FILE}, Key={key}, 数量={len(coords_list)}")
+            logger.info(
+                f"视觉数据已保存: 地址={key}, 类型={photo_type}({const.PHOTO_TYPE_DESC[photo_type]}), 坐标数={len(coords_list)}")
 
         except Exception as e:
             logger.error(f"保存视觉数据失败: {e}")
 
-    def get_vision_data(self, process_addr):
+    def get_vision_data(self, process_addr, photo_type=None):
         """
         获取视觉坐标数据
         :param process_addr: 产生数据的动作地址 (int)
@@ -904,15 +918,23 @@ class Controller(QThread):
         """
         key = hex(process_addr)
 
+        # 必须传入photo_type
+        if photo_type is None:
+            logger.warning("获取数据失败：未指定photo_type")
+            return []
+
         # 1. 优先从内存读
-        if key in self.vision_data_cache:
-            return self.vision_data_cache[key]
+        if key in self.vision_data_cache and photo_type in self.vision_data_cache[key]:
+            return self.vision_data_cache[key][photo_type]
 
         # 2. 内存没有，尝试从文件重新加载 (应对程序重启的情况)
         self.load_vision_file()
-        if key in self.vision_data_cache:
-            return self.vision_data_cache[key]
 
+        # 再次从缓存读取
+        if key in self.vision_data_cache and photo_type in self.vision_data_cache[key]:
+            return self.vision_data_cache[key][photo_type]
+
+        logger.warning(f"未找到视觉数据: 地址={key}, 类型={photo_type}")
         return []
 
     def load_vision_file(self):
@@ -922,9 +944,18 @@ class Controller(QThread):
         try:
             with open(VISION_DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # 简化结构，只存坐标列表到内存
-                for k, v in data.items():
-                    self.vision_data_cache[k] = v.get("coords", [])
+
+            # 清空原有缓存，重新加载
+            self.vision_data_cache.clear()
+            # 解析嵌套结构：地址 -> photo_type -> 坐标
+            for addr_key, type_dict in data.items():
+                # 初始化地址节点
+                self.vision_data_cache[addr_key] = {}
+                # 遍历photo_type
+                for photo_type_str, value in type_dict.items():
+                    photo_type = int(photo_type_str)
+                    self.vision_data_cache[addr_key][photo_type] = value.get("coords", [])
+
         except Exception as e:
             logger.error(f"读取视觉文件失败: {e}")
 
@@ -1032,13 +1063,16 @@ class Controller(QThread):
         self.last_motion_end_point = target_point
         return True
 
-    def transform_tool_coord(self, coord, cheat_cemera=0, cheat_z_diff=0):
+    def transform_tool_coord(self, coord, align_cemera=0, align_z_diff=0):
         """
-        工具坐标转换
+        工具坐标转换成法兰坐标
+        工具默认使用夹爪对齐;
+        align_cemera=1的情况下，使用相机对齐
+
         :param coord: 相机坐标系的坐标
-        :param cheat_cemera:
-            欺骗参数，如果cheat_cemera=1， 让【相机】成为末端工具去对齐物料， 把 gripper_offset 设置为 camera_offset，
-            同时使用 cheat_z_diff 代替z_diff
+        :param align_cemera:
+            欺骗参数，align_cemera=1， 让【相机】成为末端工具去对齐物料， 把 gripper_offset 设置为 camera_offset，
+            同时使用 align_z_diff 代替z_diff
         """
         try:
             robot_params = self.robot_params
@@ -1066,10 +1100,10 @@ class Controller(QThread):
             robot_joints = self.last_joint_status
             elbow_config = real_time_point.get("config", "elbow_up")
 
-            if cheat_cemera:
+            if align_cemera:
                 logger.info("cheat camera...")
                 gripper_offset=camera_offset
-                z_diff = cheat_z_diff
+                z_diff = align_z_diff
 
             # 4. 调用计算
             target_coord = compute_gripper_target(
@@ -1176,7 +1210,7 @@ class Controller(QThread):
 
                 # 只保存，不移动
                 # eg：保存到 0x4008C (动作76) 的名下，供 77 读取
-                self.save_vision_data(process_addr, coords)
+                self.save_vision_data(process_addr, coords, photo_type=photo_type)
 
                 return True  # 动作 76 任务完成
 
@@ -1252,7 +1286,7 @@ class Controller(QThread):
                 # 公式：Target_Z = Curr_Z - (zc - 400)
                 # 这等同于在 compute_gripper_target 中传入 z_diff = 400
                 z_target_diff = const.PRECISE_PHOTO_DISTANCE
-                approach_coord = self.transform_tool_coord(target_relative, cheat_cemera=1, cheat_z_diff=z_target_diff)
+                approach_coord = self.transform_tool_coord(target_relative, align_cemera=1, align_z_diff=z_target_diff)
                 if not approach_coord:
                     logger.error("逼近点逆解失败")
                     return "ERROR"
@@ -1281,9 +1315,14 @@ class Controller(QThread):
 
             # === 距离合适 (<= 400)，计算最终抓取坐标并保存 ===
             transform_coords = []
-
             for coord in coords:
-                trans_coord = self.transform_tool_coord(coord)
+                if photo_type == const.photo_type_find_head:
+                    # 上料区找端头, 使用相机对齐
+                    trans_coord = self.transform_tool_coord(coord, align_cemera=1)
+                else:
+                    # 上料区找料，使用夹爪对齐
+                    trans_coord = self.transform_tool_coord(coord)
+
                 if not trans_coord:
                     logger.error(f"工具坐标转换失败")
                     return "ERROR"
@@ -1291,120 +1330,16 @@ class Controller(QThread):
 
             # 只保存，不移动
             # eg：保存到 0x4008C (动作76) 的名下，供 77 读取
-            if photo_type in (const.photo_type_loading, const.photo_type_unloading):
+            if photo_type in (const.photo_type_loading, const.photo_type_find_head, const.photo_type_unloading):
                 # self.save_vision_data(process_addr, coords)
-                self.save_vision_data(process_addr, transform_coords)
+                self.save_vision_data(process_addr, transform_coords, photo_type=photo_type)
 
             return "OK"  # eg: 动作 76 任务完成
 
         logger.error("视觉重拍次数过多，强制停止")
         return "ERROR"
 
-    def scan_rack_depth_mapping(self, process_addr, search_points, config, loading, photo_type):
-        """
-        料架顶层扫描映射 (记忆跃进版)
-        利用记忆索引直接跳过已清空的上方楼层，极大提升开机恢复效率
-        """
-        logger.info("========================================")
-        logger.info("开始执行料架映射扫描 (Smart Pallet Mapping)...")
 
-        COLS_PER_LAYER = const.product_cols_per_layer
-        # 每一层的固定落差
-        LAYER_GAP = const.product_height + const.interval_height  # 177.0 mm (物料 + 木条)
-        BASE_DEPTH = const.base_depth
-        MAX_RELIABLE_DEPTH = BASE_DEPTH + LAYER_GAP + const.tolerange
-
-        total_points = len(search_points)
-        total_layers = math.ceil(total_points / COLS_PER_LAYER)
-
-        # ========================================================
-        # 【核心优化】：计算起始扫描层
-        # ========================================================
-        # 假设当前索引是 12，那么 12 // 5 = 2，直接从第 2 层开始扫
-        # 如果是新料车（索引被重置为0），0 // 5 = 0，从第 0 层开始扫
-        current_idx = self.loading_index.current_search_index
-        start_layer_idx = current_idx // COLS_PER_LAYER
-
-        # 容错：防止由于配置变动导致层数越界
-        start_layer_idx = max(0, min(start_layer_idx, total_layers - 1))
-
-        logger.info(f"根据记忆索引 [{current_idx}]，智能跳过上方空层，直接从第 {start_layer_idx} 层开始扫描")
-        logger.info("========================================")
-
-        # === 外层循环：从 start_layer_idx 开始逐层下探 ===
-        for layer_idx in range(start_layer_idx, total_layers):
-            if self.check_estop(): return -1
-
-            logger.info(f"--- 开始扫描第 {layer_idx} 层高度视野 ---")
-
-            # 提取当前层需要扫描的 5 个点
-            start_idx = layer_idx * COLS_PER_LAYER
-            end_idx = min(start_idx + COLS_PER_LAYER, total_points)
-            current_layer_points = search_points[start_idx:end_idx]
-
-            col_depths = []
-
-            # === 内层循环：扫描该层的 5 列 ===
-            for col, pt in enumerate(current_layer_points):
-                if self.check_estop(): return -1
-
-                logger.info(f"映射扫描: 前往 {pt['name']} ...")
-
-                # 移动并拍照...
-                if not self._move_segment_to_target(process_addr, target_point=pt):
-                    return -1
-
-                result = self.take_photo_position(pt.get("coords"), config, loading, photo_type)
-                res_status = result.get("res", "ng")
-                coords = result.get("coords", [])
-
-                depth = float('inf')
-                if res_status == "ok" and coords:
-                    depth = coords[0][2]
-                    logger.info(f"  -> 第 {col} 列检测到物料，深度 Zc = {depth:.1f} mm")
-                else:
-                    logger.info(f"  -> 第 {col} 列视野为空")
-
-                col_depths.append(depth)
-
-            # === 分析当前层的扫描结果 ===
-            min_depth = min(col_depths)
-
-            if min_depth <= MAX_RELIABLE_DEPTH:
-                valid_items = []
-                for col, depth in enumerate(col_depths):
-                    if depth <= MAX_RELIABLE_DEPTH:
-                        # 相对层数计算
-                        relative_layer = round((depth - BASE_DEPTH) / LAYER_GAP)
-
-                        # 绝对层数 = 当前扫描层 + 相对层数
-                        absolute_layer = layer_idx + relative_layer
-                        absolute_layer = max(0, min(absolute_layer, total_layers - 1))
-                        valid_items.append((col, absolute_layer, depth))
-
-                if valid_items:
-                    min_abs_layer = min(item[1] for item in valid_items)
-                    items_in_top_layer = [item for item in valid_items if item[1] == min_abs_layer]
-
-                    best_item = items_in_top_layer[0]
-                    best_col = best_item[0]
-                    best_abs_layer = best_item[1]
-                    best_depth = best_item[2]
-
-                    target_index = best_abs_layer * COLS_PER_LAYER + best_col
-
-                    logger.info("========================================")
-                    logger.info(f"映射成功！锁定目标：第 {best_abs_layer} 层，第 {best_col} 列")
-                    logger.info(f"推算总列表索引为 [{target_index}]")
-                    logger.info("========================================")
-
-                    return target_index
-
-            else:
-                logger.warning(f"第 {layer_idx} 层扫描未发现近距离物料，准备下探...")
-
-        logger.critical("映射失败：所有高度层扫描完毕，料架已完全空载！")
-        return -1
 
     def _wait_for_udp_response(self, sock, expected_msg="OK", timeout_sec=30.0):
         """
@@ -1449,6 +1384,94 @@ class Controller(QThread):
                 return False
 
         return False
+
+    def execute_standard_motion_sequence_history_1(self, process_addr, points_sequence):
+        """
+        通用的运动控制序列执行函数
+        :param points_sequence: 包含起点的完整点位列表 [Start, P1, P2...]
+        """
+        points_count = len(points_sequence)
+
+        # 循环发送坐标
+        for i in range(points_count - 1):
+            # 1. 获取起点、终点坐标
+            start_point = points_sequence[i]
+            end_point = points_sequence[i + 1]
+
+            # 2. 生成插值路径
+            interpolated_path = TrajectoryV2().generate_cartesian_interpolated_path(
+                [start_point, end_point],
+                num_inserts=const.point_interpolated_num
+            )
+            points_to_send = interpolated_path[1:]  # 去掉起点
+
+            # 拍照标志, 0/默认值，1/拍照，2/给坐标
+            photo_trigger = end_point.get("photo", 0)
+            target_name = end_point.get("name", f"P{i + 1}")
+
+            # === while 重试循环 (你原来的逻辑) ===
+            while self.running:
+                logger.info(f"--- 执行段 {i + 1}/{points_count - 1}: {start_point.get('name')} -> {target_name} ---")
+                # 3. 发送数据
+                if not self.send_coords_batch(process_addr, points_to_send, 8):
+                    logger.error("坐标发送失败，终止流程")
+                    return False
+
+                # 4. 握手
+                self.plc.write_register(process_addr, 11)
+                logger.info(f"坐标发送成功，发送响应11")
+
+                # 5. 等待到位
+                if not self.wait_for_plc_val(process_addr, 12, timeout=7200):
+                    logger.error("等待机械臂到位超时")
+                    return False
+
+                logger.info(f"段 {target_name} 到位, plc回复 12)")
+
+                # 拍照/定位处理
+                vision_ok = True
+
+                if photo_trigger == 1:  # 检查
+                    # if self.take_photo_check() == "NG": vision_ok = False
+                    logger.info("触发拍照...")
+                    photo_res = self.take_photo()  # 返回 "OK" 或 "NG"
+
+                    if photo_res == "OK":
+                        logger.info("拍照结果: OK")
+                        # 拍照成功，发送 15 (根据协议，可能需要告知PLC拍照OK)
+                        # 注意：如果不是最后一步，发送15可能会覆盖状态，需确认协议细节。
+                        # 通常做法：NG才报错，OK则继续。这里假设OK需要发15确认。 暂时注释掉
+                        # self.plc.write_register(process_addr, 15)
+                        vision_ok = True
+                    else:
+                        logger.error("拍照结果: NG")
+                        vision_ok = False
+                elif photo_trigger == 2:  # 定位
+                    coords_list = self.take_photo_position()
+                    if coords_list and len(coords_list) > 0:
+                        logger.info(f"视觉定位成功，获取到 {len(coords_list)} 个目标")
+                        # [保存数据] Key 使用当前的 process_addr
+                        self.save_vision_data(process_addr, coords_list, photo_type=const.photo_type_loading)
+                        # self.vision_target_coords = pos  # 保存
+                    else:
+                        logger.error("视觉定位失败 (未识别到目标)")
+                        vision_ok = False
+
+                # 结果分支
+                if vision_ok:
+                    break
+                else:
+                    self.plc.write_register(process_addr, 16)
+                    # 等待 20 复位...
+                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                        continue
+                    else:
+                        return False
+
+        # 全部完成
+        self.plc.write_register(process_addr, 13)
+        logger.info("所有点位执行完毕，发送完成信号 13")
+        return True
 
     def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None, send_done=True):
         """
@@ -1634,6 +1657,113 @@ class Controller(QThread):
 
         return False
 
+    def scan_rack_depth_mapping(self, process_addr, search_points, config, loading, photo_type):
+        """
+        料架顶层扫描映射 (记忆跃进版)
+        利用记忆索引直接跳过已清空的上方楼层，极大提升开机恢复效率
+        """
+        logger.info("========================================")
+        logger.info("开始执行料架映射扫描 (Smart Pallet Mapping)...")
+
+        COLS_PER_LAYER = const.product_cols_per_layer
+        # 每一层的固定落差
+        LAYER_GAP = const.product_height + const.interval_height  # 177.0 mm (物料 + 木条)
+        BASE_DEPTH = const.base_depth
+        MAX_RELIABLE_DEPTH = BASE_DEPTH + LAYER_GAP + const.tolerange
+
+        # 总层数
+        total_points = len(search_points)
+        total_layers = math.ceil(total_points / COLS_PER_LAYER)
+
+        # ========================================================
+        # 【核心优化】：计算起始扫描层
+        # ========================================================
+        # 假设当前索引是 12，那么 12 // 5 = 2，直接从第 2 层开始扫
+        # 如果是新料车（索引被重置为0），0 // 5 = 0，从第 0 层开始扫
+        current_idx = self.loading_index.current_search_index
+        start_layer_idx = current_idx // COLS_PER_LAYER
+
+        # 容错：防止由于配置变动导致层数越界
+        start_layer_idx = max(0, min(start_layer_idx, total_layers - 1))
+
+        logger.info(f"根据记忆索引 [{current_idx}]，智能跳过上方空层，直接从第 {start_layer_idx} 层开始扫描")
+        logger.info("========================================")
+
+        # === 外层循环：从 start_layer_idx 开始逐层下探 ===
+        for layer_idx in range(start_layer_idx, total_layers):
+            if self.check_estop(): return -1
+
+            logger.info(f"--- 开始扫描第 {layer_idx} 层高度视野 ---")
+
+            # 提取当前层需要扫描的 5 个点
+            start_idx = layer_idx * COLS_PER_LAYER
+            end_idx = min(start_idx + COLS_PER_LAYER, total_points)
+            current_layer_points = search_points[start_idx:end_idx]
+
+            col_depths = []
+
+            # === 内层循环：扫描该层的 5 列 ===
+            for col, pt in enumerate(current_layer_points):
+                if self.check_estop(): return -1
+
+                logger.info(f"映射扫描: 前往 {pt['name']} ...")
+
+                # 移动并拍照...
+                if not self._move_segment_to_target(process_addr, target_point=pt):
+                    return -1
+
+                result = self.take_photo_position(pt.get("coords"), config, loading, photo_type)
+                res_status = result.get("res", "ng")
+                coords = result.get("coords", [])
+
+                depth = float('inf')
+                if res_status == "ok" and coords:
+                    depth = coords[0][2]
+                    logger.info(f"  -> 第 {col + 1} 列检测到物料，深度 Zc = {depth:.1f} mm")
+                else:
+                    logger.info(f"  -> 第 {col + 1 } 列视野为空")
+
+                col_depths.append(depth)
+
+            # === 分析当前层的扫描结果 ===
+            min_depth = min(col_depths)
+
+            if min_depth <= MAX_RELIABLE_DEPTH:
+                valid_items = []
+                for col, depth in enumerate(col_depths):
+                    if depth <= MAX_RELIABLE_DEPTH:
+                        # 相对层数计算
+                        relative_layer = round((depth - BASE_DEPTH) / LAYER_GAP)
+
+                        # 绝对层数 = 当前扫描层 + 相对层数
+                        absolute_layer = layer_idx + relative_layer
+                        absolute_layer = max(0, min(absolute_layer, total_layers - 1))
+                        valid_items.append((col, absolute_layer, depth))
+
+                if valid_items:
+                    min_abs_layer = min(item[1] for item in valid_items)
+                    items_in_top_layer = [item for item in valid_items if item[1] == min_abs_layer]
+
+                    best_item = items_in_top_layer[0]
+                    best_col = best_item[0]
+                    best_abs_layer = best_item[1]
+                    best_depth = best_item[2]
+
+                    target_index = best_abs_layer * COLS_PER_LAYER + best_col
+
+                    logger.info("========================================")
+                    logger.info(f"映射成功！锁定目标：第 {best_abs_layer} 层，第 {best_col} 列")
+                    logger.info(f"推算总列表索引为 [{target_index}]")
+                    logger.info("========================================")
+
+                    return target_index
+
+            else:
+                logger.warning(f"第 {layer_idx} 层扫描未发现近距离物料，准备下探...")
+
+        logger.critical("映射失败：所有高度层扫描完毕，料架已完全空载！")
+        return -1
+
     def execute_search_motion_sequence(self, process_addr, search_points, loading=None, photo_type=None):
         """
         阵列搜寻专用执行引擎
@@ -1698,24 +1828,12 @@ class Controller(QThread):
                     if flip_via_points:
                         logger.info(f"开始执行姿态切换安全过渡序列 (共 {len(flip_via_points)} 个点)...")
 
-                        # # 当前实时位置作为序列的第0个点，保证轨迹连续
-                        # full_flip_sequence = [realtime_pt] + flip_via_points
-                        # flip_success  = self.execute_standard_motion_sequence(
-                        #     process_addr,
-                        #     full_flip_sequence,
-                        #     send_done=False)
-                        #
-                        # if not flip_success:
-                        #     logger.error("姿态安全过渡执行失败（可能由于急停或不可达），终止当前动作")
-                        #     return False
-
                         # for 循环直接调用 _move_segment_to_target(..., interpolate=False)
                         for fp in flip_via_points:
                             if not self._move_segment_to_target(process_addr, target_point=fp, interpolate=False):
                                 return False
 
                         logger.info("姿态安全过渡执行完毕，准备前往最终目标点")
-
 
                 # 1. 移动到拍照点
                 if not self._move_segment_to_target(process_addr=process_addr, target_point=target_point):
@@ -1762,93 +1880,7 @@ class Controller(QThread):
         return self._handle_empty_rack_and_wait(process_addr)
 
 
-    def execute_standard_motion_sequence_history_1(self, process_addr, points_sequence):
-        """
-        通用的运动控制序列执行函数
-        :param points_sequence: 包含起点的完整点位列表 [Start, P1, P2...]
-        """
-        points_count = len(points_sequence)
 
-        # 循环发送坐标
-        for i in range(points_count - 1):
-            # 1. 获取起点、终点坐标
-            start_point = points_sequence[i]
-            end_point = points_sequence[i + 1]
-
-            # 2. 生成插值路径
-            interpolated_path = TrajectoryV2().generate_cartesian_interpolated_path(
-                [start_point, end_point],
-                num_inserts=const.point_interpolated_num
-            )
-            points_to_send = interpolated_path[1:]  # 去掉起点
-
-            # 拍照标志, 0/默认值，1/拍照，2/给坐标
-            photo_trigger = end_point.get("photo", 0)
-            target_name = end_point.get("name", f"P{i + 1}")
-
-            # === while 重试循环 (你原来的逻辑) ===
-            while self.running:
-                logger.info(f"--- 执行段 {i + 1}/{points_count - 1}: {start_point.get('name')} -> {target_name} ---")
-                # 3. 发送数据
-                if not self.send_coords_batch(process_addr, points_to_send, 8):
-                    logger.error("坐标发送失败，终止流程")
-                    return False
-
-                # 4. 握手
-                self.plc.write_register(process_addr, 11)
-                logger.info(f"坐标发送成功，发送响应11")
-
-                # 5. 等待到位
-                if not self.wait_for_plc_val(process_addr, 12, timeout=7200):
-                    logger.error("等待机械臂到位超时")
-                    return False
-
-                logger.info(f"段 {target_name} 到位, plc回复 12)")
-
-                # 拍照/定位处理
-                vision_ok = True
-
-                if photo_trigger == 1:  # 检查
-                    # if self.take_photo_check() == "NG": vision_ok = False
-                    logger.info("触发拍照...")
-                    photo_res = self.take_photo()  # 返回 "OK" 或 "NG"
-
-                    if photo_res == "OK":
-                        logger.info("拍照结果: OK")
-                        # 拍照成功，发送 15 (根据协议，可能需要告知PLC拍照OK)
-                        # 注意：如果不是最后一步，发送15可能会覆盖状态，需确认协议细节。
-                        # 通常做法：NG才报错，OK则继续。这里假设OK需要发15确认。 暂时注释掉
-                        # self.plc.write_register(process_addr, 15)
-                        vision_ok = True
-                    else:
-                        logger.error("拍照结果: NG")
-                        vision_ok = False
-                elif photo_trigger == 2:  # 定位
-                    coords_list = self.take_photo_position()
-                    if coords_list and len(coords_list) > 0:
-                        logger.info(f"视觉定位成功，获取到 {len(coords_list)} 个目标")
-                        # [保存数据] Key 使用当前的 process_addr
-                        self.save_vision_data(process_addr, coords_list)
-                        # self.vision_target_coords = pos  # 保存
-                    else:
-                        logger.error("视觉定位失败 (未识别到目标)")
-                        vision_ok = False
-
-                # 结果分支
-                if vision_ok:
-                    break
-                else:
-                    self.plc.write_register(process_addr, 16)
-                    # 等待 20 复位...
-                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
-                        continue
-                    else:
-                        return False
-
-        # 全部完成
-        self.plc.write_register(process_addr, 13)
-        logger.info("所有点位执行完毕，发送完成信号 13")
-        return True
 
     # 设备初始化
     def handle_process_0x400A7(self, process_addr, value):
@@ -2341,7 +2373,7 @@ class Controller(QThread):
         source_addr = last_process_addr
 
         # 3. 读取视觉数据，eg:[p1, p2, p3]
-        vision_points_coords = self.get_vision_data(source_addr)
+        vision_points_coords = self.get_vision_data(source_addr, photo_type=const.photo_type_loading)
         if not vision_points_coords:
             logger.error(f"未找到地址 {hex(source_addr)} 的视觉数据")
             return
@@ -2365,16 +2397,18 @@ class Controller(QThread):
         wp1 = copy.deepcopy(target_point)
         wp1["coords"][2] = process_start_point["coords"][2]
 
-        # wp1向前移动50，构造wp2
-        # wp2 = self.move_forward(wp1, 45)
+        # wp1向前移动35，构造wp2
+        wp2 = self.move_forward(wp1, 35)
 
         # wp2下降到目标点的z, 构造wp3
         h_delta = target_point["coords"][2] - wp1["coords"][2] + 40
         logger.info(f"h_delta is : {h_delta}")
-        wp2 = self.move_up_down(wp1, h_delta)
+        # wp3 = self.move_up_down(wp1, h_delta)
+
+        wp3 = self.move_up_down(wp2, h_delta)
 
         # wp3下降40，构造wp4
-        wp3 = self.move_up_down(wp2, -80)
+        wp4 = self.move_up_down(wp3, -70)
 
         # 上方50，测试用
         way_point_up = self.move_up_down(target_point, 80)
@@ -2384,7 +2418,7 @@ class Controller(QThread):
         way_point_down = self.move_up_down(way_point_forward, -100)
 
         # points = [process_start_point, way_point_up, way_point_forward, way_point_down]
-        points = [process_start_point, wp1, wp2]
+        points = [process_start_point, wp1, wp2, wp3, wp4]
 
         """
         # 1、从实时点移动到目标点后面50mm处
