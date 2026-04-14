@@ -411,16 +411,56 @@ class ScaraKinematics:
         j2 = ik_res['the2']
 
         # 2. 根据公式反算电机角度 r (J4)
-        r = world_r - (j1 + j2)
+        motor_r = world_r - (j1 + j2)
 
         # 3. 归一化处理 (保证算出的角度在 -180° 到 180° 之间，防止电机多绕圈)
-        while r > 180:
-            r -= 360
-        while r <= -180:
-            r += 360
+        while motor_r > 180:
+            motor_r -= 360
+        while motor_r <= -180:
+            motor_r += 360
 
-        return r
+        j4_max, j4_min = const.J4_LIMIT_MAX, const.J4_LIMIT_MIN
+        if not (j4_min <= motor_r <= j4_max):
+            logger.error(f"限位校验失败: J4 ({motor_r:.2f}°) 越界[{j4_min}, {j4_max}]")
+            return None
 
+        return motor_r
+
+    @staticmethod
+    def calculate_motor_r_from_world_angle_smart(xe, ye, ze, world_r, l1, l2, z0, nn3, current_j2):
+        """
+        智能计算末端电机角度R，并自动返回最佳手系姿态
+        :param current_j2: 当前 J2 的实际角度，用于智能推断
+        :return: (r, best_config) 或 (None, None)
+        """
+        # 1. 调用智能逆解，不传固定的 elbow_config，而是传 current_j2 让它自己选
+        ik_res = ScaraKinematics.calculate_best_inverse_kinematics(
+            xe, ye, ze, 0,  # te传0即可
+            l1, l2, z0, nn3,
+            current_j2=current_j2
+        )
+
+        if not ik_res:
+            # logger.error(f"坐标 ({xe}, {ye}) 完全不可达") # 调用层打印也可以
+            return None, None
+
+        # 2. 提取算出来的 J1, J2 和 智能选定的 config
+        j1 = ik_res['the1']
+        j2 = ik_res['the2']
+        best_config = ik_res['config']  # 核心：这是算法觉得最安全的姿态
+
+        # 3. 反算电机角度 r (J4)
+        motor_r = world_r - (j1 + j2)
+
+        # 4. 归一化处理
+        while motor_r > 180: motor_r -= 360
+        while motor_r <= -180: motor_r += 360
+
+        if not (const.J4_LIMIT_MIN <= motor_r <= const.J4_LIMIT_MAX):
+            logger.error(f"限位校验失败: J4 ({motor_r:.2f}°) 越界[{const.J4_LIMIT_MIN}, {const.J4_LIMIT_MAX}]")
+            return None
+
+        return motor_r, best_config
 
     @staticmethod
     def calculate_world_angle_from_j4(xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up'):
@@ -652,12 +692,12 @@ if __name__ == "__main__":
     point = {
                     "name": "Teach_P1",
                     "coords": [
-                        -213.97,
-                        1354.65,
-                        -12.36,
-                        -129.49
+                        -218.08,
+                        1242.66,
+                        -15.98,
+                        -126.72
                     ],
-                    "photo": 1,
+                    "photo": 0,
                     "config": "elbow_up"
                 }
     # xe, ye, ze, te = point.get('coords')
@@ -669,11 +709,19 @@ if __name__ == "__main__":
     ze = point.get("coords")[2]
     te = point.get("coords")[3]
     # world_r = 90
-    motor_r = point.get("coords")[3]
+    motor_angle = point.get("coords")[3]
     config_curr = point.get("config")
 
     res = ScaraKinematics().inverse_kinematics_v2(xe, ye, ze, te, l1, l2, z0, nn3, config_type=config_curr)
     print(res)
+
+    res_world_angle = ScaraKinematics().calculate_world_angle_from_j4(
+        xe, ye, ze, te,
+        l1, l2, z0, nn3,
+        config_type=config_curr
+    )
+    print(res_world_angle)
+
 
     # motor_r = ScaraKinematics().calculate_motor_r_from_world_angle(xe, ye, ze, world_r, l1, l2, z0, nn3, config_curr)
     # print([xe, ye, ze, motor_r])

@@ -121,6 +121,8 @@ base_depth = 320  # 首层标准深度，最上层拍照位，深度相机与物
 product_cols_per_layer = 5  # 每层的物料数量
 product_total_layers = 2  # 物料的总层数
 tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动
+product_y_offset = 1020.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
+fine_photo_world_angle = 0  # 精拍点位的末端绝对角度
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8  # 200

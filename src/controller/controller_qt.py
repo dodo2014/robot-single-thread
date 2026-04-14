@@ -237,7 +237,7 @@ class Controller(QThread):
         e_stop_regs = self.plc.read_holding_registers(self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR), 1)
         if self.loop_count % 50 == 0:
             logger.info(
-            f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
+                f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
 
         # === 全局急停拦截 ===
         if self.check_estop():
@@ -265,12 +265,12 @@ class Controller(QThread):
         )
 
         # 防止日志刷屏
-        if self.loop_count % 50 == 0:logger.info(f"loop states: {states}")
+        if self.loop_count % 50 == 0: logger.info(f"loop states: {states}")
         addr_value_map = {
             start_addr + idx: val
             for idx, val in enumerate(states)
         }
-        if self.loop_count % 50 == 0:logger.info(f"loop states (地址:值): {addr_value_map}")
+        if self.loop_count % 50 == 0: logger.info(f"loop states (地址:值): {addr_value_map}")
 
         if not states:
             return
@@ -415,7 +415,6 @@ class Controller(QThread):
         except Exception as e:
             logger.info(e)
 
-
     def _fill_zero_group(self, a1, a2, a3, a4, a5, a6):
         """辅助函数：将一组地址清零"""
         self.plc.write_float(a1, 0.0)
@@ -555,7 +554,8 @@ class Controller(QThread):
         xe, ye, ze, te = coords[0], coords[1], coords[2], coords[3]
         try:
             # 逆解运算
-            ik_res = ScaraKinematics.inverse_kinematics_v2(xe, ye, ze, te, self.l1, self.l2, self.z0, self.nn3, config_type=elbow_config)
+            ik_res = ScaraKinematics.inverse_kinematics_v2(xe, ye, ze, te, self.l1, self.l2, self.z0, self.nn3,
+                                                           config_type=elbow_config)
             if ik_res:
                 # 发送一个无意义的读取，仅仅为了保持 TCP 连接活跃
                 self.plc.read_holding_registers(const.ADDR_FIRST, 1)
@@ -717,9 +717,9 @@ class Controller(QThread):
                                                                                               self.nn3, xe, ye, ze, te,
                                                                                               distance,
                                                                                               config_curr=config_curr)
-            name = "FP_P0" # forward point
+            name = "FP_P0"  # forward point
             if distance < 0:
-                name = "BP_P0" # backward point
+                name = "BP_P0"  # backward point
 
             foward_point = {
                 "name": name,
@@ -749,7 +749,7 @@ class Controller(QThread):
 
             name = "UP_P0"
             if distance < 0:
-                name ="DOWN_P0"
+                name = "DOWN_P0"
 
             new_point = {
                 "name": name,
@@ -843,7 +843,7 @@ class Controller(QThread):
                     if exists == 1:
                         res = "error"  # 有铁屑，真报错
                     elif exists == 2:
-                        res = "ok" #
+                        res = "ok"  #
 
                 return {
                     "res": res,
@@ -857,8 +857,7 @@ class Controller(QThread):
         except Exception as e:
             logger.info(f"take photo position error: {e}, traceback: {traceback.format_exc()}")
 
-
-        return {"res": "error", "coords":[], "trigger": ""}
+        return {"res": "error", "coords": [], "trigger": ""}
 
     def save_vision_data(self, process_addr, coords_list, photo_type=None):
         """
@@ -983,7 +982,8 @@ class Controller(QThread):
             # 暂停检查, 直到恢复才继续运行；暂停恢复后，重置 start_time，给足时间让机械臂继续走
             if self.check_and_handle_pause():
                 start_time = time.time()
-                logger.info(f"阻塞监听PLC，暂停恢复，重置开始时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
+                logger.info(
+                    f"阻塞监听PLC，暂停恢复，重置开始时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
 
             time_consume = time.time() - start_time
             if count % 20 == 0: logger.info(f"阻塞监听PLC，耗时 {time_consume} s")
@@ -1046,7 +1046,6 @@ class Controller(QThread):
                 logger.error("坐标发送失败")
                 return False
 
-
         if self.check_estop(): return False  # 确认是否因急停退出
         # 4. 握手 (11)
         self.plc.write_register(process_addr, 11)
@@ -1102,7 +1101,7 @@ class Controller(QThread):
 
             if align_cemera:
                 logger.info("cheat camera...")
-                gripper_offset=camera_offset
+                gripper_offset = camera_offset
                 z_diff = align_z_diff
 
             # 4. 调用计算
@@ -1240,7 +1239,8 @@ class Controller(QThread):
             loop_count += 1
             realtime_pt = self.get_realtime_point()
             realtime_pt_coords = realtime_pt.get("coords", [])
-            logger.info(f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {realtime_pt_coords}, 当前loading动作: {loading}")
+            logger.info(
+                f"执行视觉检测 (第 {loop_count} 次), 当前物理坐标: {realtime_pt_coords}, 当前loading动作: {loading}")
 
             # 1. 调用相机接口
             result = self.take_photo_position(point_coords, config, loading=loading, ptype=photo_type)
@@ -1317,10 +1317,11 @@ class Controller(QThread):
             transform_coords = []
             for coord in coords:
                 if photo_type == const.photo_type_find_head:
-                    # 上料区找端头, 使用相机对齐
+                    # 找端头模式, 使用【相机】对齐目标
+                    # 传入 cheat_gripper_offset 标志 (需在 transform_tool_coord 内部实现，让夹爪offset = 相机offset)
                     trans_coord = self.transform_tool_coord(coord, align_cemera=1)
                 else:
-                    # 上料区找料，使用夹爪对齐
+                    # 普通模式，使用【夹爪】对齐目标
                     trans_coord = self.transform_tool_coord(coord)
 
                 if not trans_coord:
@@ -1338,8 +1339,6 @@ class Controller(QThread):
 
         logger.error("视觉重拍次数过多，强制停止")
         return "ERROR"
-
-
 
     def _wait_for_udp_response(self, sock, expected_msg="OK", timeout_sec=30.0):
         """
@@ -1473,7 +1472,8 @@ class Controller(QThread):
         logger.info("所有点位执行完毕，发送完成信号 13")
         return True
 
-    def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None, send_done=True):
+    def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None,
+                                         send_done=True):
         """
         标准运动序列执行函数
         :param process_addr:动作地址位
@@ -1721,7 +1721,7 @@ class Controller(QThread):
                     depth = coords[0][2]
                     logger.info(f"  -> 第 {col + 1} 列检测到物料，深度 Zc = {depth:.1f} mm")
                 else:
-                    logger.info(f"  -> 第 {col + 1 } 列视野为空")
+                    logger.info(f"  -> 第 {col + 1} 列视野为空")
 
                 col_depths.append(depth)
 
@@ -1816,30 +1816,32 @@ class Controller(QThread):
                 # 姿态切换检测与【多点安全过渡】逻辑
                 # ========================================================
                 realtime_pt = self.get_realtime_point()
+
                 curr_config = realtime_pt.get("config", "elbow_up") if realtime_pt else "elbow_up"
                 target_config = target_point.get("config", "elbow_up")
-                # 如果检测到接下来的目标点需要翻肘
-                if curr_config != target_config:
-                    logger.warning(f"检测到机械臂姿态即将切换 ({curr_config} -> {target_config})")
-                    # 读取配置中的多点安全过渡序列
-                    flip_via_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get(
-                        "flip_via_points",[])
 
-                    if flip_via_points:
-                        logger.info(f"开始执行姿态切换安全过渡序列 (共 {len(flip_via_points)} 个点)...")
+                # # 如果检测到接下来的目标点需要翻肘
+                # if curr_config != target_config:
+                #     logger.warning(f"检测到机械臂姿态即将切换 ({curr_config} -> {target_config})")
+                #     # 读取配置中的多点安全过渡序列
+                #     flip_via_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get(
+                #         "flip_via_points",[])
+                #
+                #     if flip_via_points:
+                #         logger.info(f"开始执行姿态切换安全过渡序列 (共 {len(flip_via_points)} 个点)...")
+                #
+                #         # for 循环直接调用 _move_segment_to_target(..., interpolate=False)
+                #         for fp in flip_via_points:
+                #             if not self._move_segment_to_target(process_addr, target_point=fp, interpolate=False):
+                #                 return False
+                #
+                #         logger.info("姿态安全过渡执行完毕，准备前往最终目标点")
 
-                        # for 循环直接调用 _move_segment_to_target(..., interpolate=False)
-                        for fp in flip_via_points:
-                            if not self._move_segment_to_target(process_addr, target_point=fp, interpolate=False):
-                                return False
-
-                        logger.info("姿态安全过渡执行完毕，准备前往最终目标点")
-
-                # 1. 移动到拍照点
+                # 1. 移动到端头搜寻点
                 if not self._move_segment_to_target(process_addr=process_addr, target_point=target_point):
                     return False
 
-                # 2. 触发拍照识别 (获取新定义的三态返回值)
+                # 2. 触发端头拍照识别 (获取新定义的三态返回值)
                 vision_res = self.handle_vision_recursive_v1(process_addr, target_point, loading, photo_type)
 
                 # # 测试移动
@@ -1851,12 +1853,82 @@ class Controller(QThread):
                     # 找到了！保存进度，下次还从这个视野开始找 (因为一个视野可能有两个料)
                     # 或者如果一个视野只抓一次，可以存 i + 1。这里假设存 i
                     self.loading_index.save_search_index(i)
-                    self.last_motion_end_point = target_point
 
-                    logger.info(f"物料已找到并保存！当前搜寻索引保留在: {i}")
-                    # 给 PLC 发送动作完成
-                    self.plc.write_register(process_addr, 13)
-                    return True
+                    logger.info("=========================================")
+                    logger.info("端头已找到！准备平移 1020mm 进行精确定位")
+                    logger.info("=========================================")
+
+                    # 1. 获取刚才转换好的“端头法兰绝对坐标”
+                    p_head_data = self.get_vision_data(process_addr, photo_type=const.photo_type_find_head)
+                    if not p_head_data:
+                        return False
+
+                    x_f, y_f, z_f, r_f = p_head_data[0]
+
+                    # 2. 计算精拍点的绝对坐标 (直接 Y + 1020)
+                    target_y = y_f + const.product_y_offset
+
+                    # 3. 根据定义的末端绝对角度，计算j4
+                    x_f_p= x_f
+                    y_f_p = target_y
+                    # 取原本悬停的安全 Z 高度
+                    z_f_p =  target_point["coords"][2]
+                    config_f_p = target_point.get("config", "elbow_up")
+
+                    j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
+                        x_f_p, y_f_p, z_f_p, const.fine_photo_world_angle,
+                        self.l1, self.l2, self.z0, self.nn3,
+                        elbow_config=config_f_p)
+
+                    # ############################
+                    # # 智能计算j4, 和elbow位姿
+                    # ############################
+                    # _ = self.get_realtime_point()
+                    # current_j2 = self.last_joint_status[1]
+                    #
+                    # # === 4. 调用智能函数，同时获取 J4 和 安全的 Config ===
+                    # j4, safe_config = ScaraKinematics.calculate_motor_r_from_world_angle_smart(
+                    #     x_f_p, y_f_p, z_f_p, const.fine_photo_world_angle,
+                    #     self.l1, self.l2, self.z0, self.nn3,
+                    #     current_j2=current_j2  # 传入当前 J2
+                    # )
+                    # config_f_p = safe_config
+
+                    if j4 is None:
+                        logger.error("计算精拍点 J4 补偿角度失败，目标可能超限")
+                        return False
+
+                    # 4. 构造精拍点对象
+                    fine_photo_pt = {
+                        "name": "Fine_Photo_Pos_1020",
+                        "coords": [x_f_p, y_f_p, z_f_p, j4],
+                        # 注意 Z 和 R 保持最初的安全悬停高度和姿态
+                        "config": config_f_p,
+                        "photo": 0
+                    }
+
+                    logger.info(f"端头法兰Y: {y_f:.2f}, 平移后精拍法兰Y: {target_y:.2f}")
+
+                    # 4. 移动到精拍点
+                    if not self._move_segment_to_target(process_addr, target_point=fine_photo_pt):
+                        return False
+
+                    # 5. 第 2 拍：精确定位 (这次用 photo_type_loading，它会算出夹爪的真实抓取坐标)
+                    final_vision_res = self.handle_vision_recursive_v1(process_addr, fine_photo_pt, loading,
+                                                                       photo_type=const.photo_type_loading)
+
+                    if final_vision_res == "OK":
+                        logger.info("精确定位成功！最终抓取坐标已保存。")
+                        self.last_motion_end_point = fine_photo_pt
+                        self.plc.write_register(process_addr, 13)
+                        return True
+                    else:
+                        # 精拍失败，发 16 报警等人工处理
+                        logger.info("精确定失败！")
+                        self.plc.write_register(process_addr, 16)
+                        if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                            continue  # 收到 20 后，重头开始找端头
+                        return False
 
                 elif vision_res == "EMPTY":
                     # 没找到，属于正常现象！
@@ -1879,9 +1951,6 @@ class Controller(QThread):
         # ==========================================
         return self._handle_empty_rack_and_wait(process_addr)
 
-
-
-
     # 设备初始化
     def handle_process_0x400A7(self, process_addr, value):
         if value != 10:
@@ -1902,6 +1971,7 @@ class Controller(QThread):
         #     "photo": 0
         # }
         origin_point = origin_cfg
+
         # 3 构建点位列表
         points = [process_start_point, origin_point]
         logger.info(f"handle_process_0x400A7, points: {points}")
@@ -2345,7 +2415,7 @@ class Controller(QThread):
             process_addr=process_addr,
             search_points=search_points,
             loading=1,
-            photo_type=const.photo_type_loading
+            photo_type=const.photo_type_find_head
         )
 
         # 3. 结果处理
@@ -2354,7 +2424,6 @@ class Controller(QThread):
             # 这里的 self.last_motion_end_point 在引擎内部已经更新过了
         else:
             logger.error(f"动作 {hex(process_addr)} 搜寻终止（缺料、急停或硬件故障）。")
-
 
     # 臂去上料位取料
     def handle_process_0x4008D(self, process_addr, value):
