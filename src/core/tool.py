@@ -22,7 +22,8 @@ def compute_gripper_target(
         robot_params,  # {l1, l2, ...}
         cam_rotation=0,  # 相机安装旋转角 (0: 图像上=机器后, 90: 图像上=机器右...)
         gripper_install_angle=0, # 如果夹爪本身装歪了，也可以传这个
-        angle_offset=0 # 夹爪角度补偿值
+        angle_offset=0, # 夹爪角度补偿值
+        joint_valid=True  # 转换是否需要验证角度限位
 ):
     try:
         logger.info(f"camera data: {camera_data}")
@@ -138,7 +139,7 @@ def compute_gripper_target(
         ik_res = ScaraKinematics().inverse_kinematics_v2(
             target_motor_x, target_motor_y, target_motor_z, 0,
             robot_params['l1'], robot_params['l2'], robot_params['z0'], robot_params['nn3'],
-            config_type=elbow_config
+            config_type=elbow_config, joint_valid=joint_valid
         )
 
         if not ik_res:
@@ -335,13 +336,13 @@ def main():
     # elbow_config = 'elbow_up'
     # robot_joints = [-14.82, 32.76, 20.00, 29.48]
 
-    vision_data =  [19.03, -72.54, 437, -6.282500000000001]
+    vision_data =  [28.0, 32.2, 343.0, -0.14928571428571552]
     # vision_data = [0, 0, 0, 10]
-    robot_state = [-68.7103, 1348.2699, 10.85, -106.92]
+    robot_state = [227.8038, 1305.7167, -15.9826, -64.8508]
     # robot_state = [-186.7302, 1294.0801, 175.23, -116.29]
     # robot_state = [740, 640, 0, -116.29]
 
-    elbow_config = 'elbow_up'
+    elbow_config = 'elbow_down'
     # robot_joints = [97.85723114013672, -31.08187484741211, 175.23980712890625, -63.38987731933594]
 
     ik = ScaraKinematics().inverse_kinematics_v2(robot_state[0], robot_state[1], robot_state[2], robot_state[3],

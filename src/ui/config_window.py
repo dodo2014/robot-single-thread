@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from src.utils.config_manager import CONFIG_FILE
 
+
 # ADDR_FEEDBACK_START = 0x400BE
 # FEEDBACK_LEN = 8  # 4个float = 8个寄存器
 
@@ -37,7 +38,6 @@ class ConfigEditorUI(QMainWindow):
         self.ui_timer.timeout.connect(self.refresh_realtime_display)
         # 设置刷新频率，例如 200ms (5Hz)，人眼看着流畅即可，不必太快
         self.ui_timer.start(200)
-
 
     def init_ui(self):
         central_widget = QWidget()
@@ -259,32 +259,34 @@ class ConfigEditorUI(QMainWindow):
         # 【核心修改】创建内部 TabWidget 管理两个表格
         self.tabs_points = QTabWidget()
 
-        self.tabs_points.setStyleSheet("""
-                    QTabBar::tab {
-                        background-color: #E0E0E0;  /* 未选中时的浅灰背景 */
-                        color: #333333;             /* 未选中时的字体颜色 */
-                        padding: 8px 10px;          /* 标签内边距，让标签大一点 */
-                        
-                        min-width: 150px;         /* 标签最小宽度（根据你的文字长度调整） */
-                        
-                        border-top-left-radius: 4px;/* 圆角 */
-                        border-top-right-radius: 4px;
-                        margin-right: 0px;          /* 标签之间的间距 */
-                        font-size: 10pt;
-                    }
-                    QTabBar::tab:hover:!selected {
-                        background-color: #B0BEC5;  /* 鼠标悬浮但未选中时的颜色 */
-                    }
-                    QTabBar::tab:selected {
-                        background-color: #2196F3;  /* 选中时的蓝色背景 */
-                        color: white;               /* 选中时的白色字体 */
-                        font-weight: bold;          /* 选中时字体加粗 */
-                    }
-                    QTabWidget::pane {
-                        border: 1px solid #2196F3;  /* 给下方的表格区域加一圈蓝色边框，视觉更统一 */
-                        top: -1px; 
-                    }
-                """)
+        self.tabs_points.setStyleSheet(
+        """
+            QTabBar::tab {
+                background-color: #E0E0E0;  /* 未选中时的浅灰背景 */
+                color: #333333;             /* 未选中时的字体颜色 */
+                padding: 8px 10px;          /* 标签内边距，让标签大一点 */
+                
+                min-width: 155px;         /* 标签最小宽度（根据你的文字长度调整） */
+                
+                border-top-left-radius: 4px;/* 圆角 */
+                border-top-right-radius: 4px;
+                margin-right: 0px;          /* 标签之间的间距 */
+                font-size: 10pt;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #B0BEC5;  /* 鼠标悬浮但未选中时的颜色 */
+            }
+            QTabBar::tab:selected {
+                background-color: #2196F3;  /* 选中时的蓝色背景 */
+                color: white;               /* 选中时的白色字体 */
+                font-weight: bold;          /* 选中时字体加粗 */
+            }
+            QTabWidget::pane {
+                border: 1px solid #2196F3;  /* 给下方的表格区域加一圈蓝色边框，视觉更统一 */
+                top: -1px; 
+            }
+            """
+        )
 
         # 1. 普通点位
         self.table_normal_points = self._create_points_table()
@@ -292,11 +294,11 @@ class ConfigEditorUI(QMainWindow):
 
         # 2. 阵列搜寻点位
         self.table_search_points = self._create_points_table()
-        self.tabs_points.addTab(self.table_search_points, "阵列搜寻点位")
+        self.tabs_points.addTab(self.table_search_points, "上料阵列搜寻点位")
 
         # 3. 翻肘安全过渡点位
         self.table_flip_points = self._create_points_table()
-        self.tabs_points.addTab(self.table_flip_points, "翻肘过渡点位")
+        self.tabs_points.addTab(self.table_flip_points, "上料翻肘过渡点位")
 
         right_layout.addWidget(self.tabs_points)
 
@@ -399,7 +401,6 @@ class ConfigEditorUI(QMainWindow):
         layout.addWidget(grp_manage)
 
         layout.addStretch()
-
 
     def init_tools_tab(self):
         """初始化工装夹具配置 Tab (样式升级版)"""
@@ -581,7 +582,6 @@ class ConfigEditorUI(QMainWindow):
             })
         return extracted_points
 
-
     def _set_row_elbow_combo(self, table, row, current_val="elbow_up"):
         """辅助函数：给指定行设置姿态下拉框"""
         combo_config = QComboBox()
@@ -612,7 +612,6 @@ class ConfigEditorUI(QMainWindow):
             combo_photo.setCurrentIndex(0)
 
         table.setCellWidget(row, 5, combo_photo)
-
 
     def swap_table_rows(self, table, row1, row2):
         """核心逻辑：交换两行的数据"""
@@ -660,7 +659,6 @@ class ConfigEditorUI(QMainWindow):
         if row <= 0: return
         self.swap_table_rows(active_table, row, row - 1)
         active_table.setCurrentCell(row - 1, 0)
-
 
     def move_point_down(self):
         """下移当前行"""
@@ -792,7 +790,6 @@ class ConfigEditorUI(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载配置文件失败: {e}")
-
 
     def on_process_selected(self, current_item, previous_item):
         if not current_item:
@@ -1572,6 +1569,7 @@ class ConfigEditorUI(QMainWindow):
 
             except ValueError:
                 QMessageBox.warning(self, "错误", "请输入有效的数字参数")
+
 
 # === 测试入口 ===
 if __name__ == "__main__":

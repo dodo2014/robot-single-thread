@@ -27,18 +27,34 @@
 	"tool_coord_r": 0,              // 工具旋转角度偏移（度）
 	
 	// ==================== 产品尺寸参数 ====================
-	"product_height": 40,          // 单个产品的高度（mm），用于分层检测
-	"product_width": 40,           // 单个产品的宽度（mm），用于过滤直线
-	"interval_height": 92,          // 层与层之间间隔木条的高度（mm）
-	"product_start_height": 320,    // 顶层产品初始高度（mm）
+	"product_height": 40,          // 单个产品的高度（mm），用于分层检测; 40不是真实高度，是产品上边缘到折弯的高度
+	"product_width": 40,           // 单个产品的宽度（mm），用于过滤直线；40不是真实宽度，是产品上边缘的宽度
+	"interval_height": 92,          // 层与层之间间隔木条的高度（mm），层高需要对product_height进行补偿，product_height+interval_height=真实层高
+	"product_start_height": 400,    // 顶层产品初始高度（mm）
 	"tray_start_height": 1000,      // 托盘初始高度（mm），底层产品的基准深度
 	"product_count_per_layer": 2,  // 上料每层产品数量
 	
+	// ==================== 端面水平线检测配置（相机翻转90度） ====================
+	"end_roi_x": 200,
+	"end_roi_y": 300,
+	"end_roi_w": 1000, 
+	"end_roi_h": 300,
+
+	//"end_depth_start": 420, //产品端面的拍摄高度
+	"end_depth_min": 400,
+	"end_depth_max": 440,
+	"end_depth_thresh": 10,
+	"end_min_length": 10,      // 端面边缘较短
+	"end_edge_index": 0,		// 返回所有端面边缘中心坐标
+	"end_offset_x": 0,
+	"end_offset_y": 0,
+	"end_offset_z": 0,
+	
 	// ==================== 上料区域配置 ====================
 	"feed_roi_x": 300,              // 上料ROI左上角X坐标（像素）
-	"feed_roi_y": 270,                // 上料ROI左上角Y坐标（像素）
+	"feed_roi_y": 0,                // 上料ROI左上角Y坐标（像素）
 	"feed_roi_w": 800,              // 上料ROI宽度（像素）
-	"feed_roi_h": 330,              // 上料ROI高度（像素）
+	"feed_roi_h": 750,              // 上料ROI高度（像素）
 	
 	// "feed_roi_x": 400,              // 上料ROI左上角X坐标（像素）
 	// "feed_roi_y": 157,                // 上料ROI左上角Y坐标（像素）

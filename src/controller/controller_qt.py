@@ -407,7 +407,8 @@ class Controller(QThread):
 
             if regs and regs[0] == const.product_loading_rack_reset:  # 收到 10
                 # 上料索引复位
-                self.loading_index.reset_search_index()
+                self.loading_index.reset_search_index(const.search_index_name)
+                self.loading_index.reset_search_index(const.head_layer_index_name)
 
                 # 通知plc上位机已经复位完毕
                 self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset_ack)
@@ -834,6 +835,11 @@ class Controller(QThread):
                         res = "ok"
                     else:
                         res = "empty"
+                elif ptype == const.photo_type_find_head:
+                    if exists == 1:
+                        res = "ok"
+                    else:
+                        res = "empty"
                 elif ptype == const.photo_type_unloading:  # 1
                     if result.get("coords", []):
                         res = "ok"
@@ -1062,15 +1068,15 @@ class Controller(QThread):
         self.last_motion_end_point = target_point
         return True
 
-    def transform_tool_coord(self, coord, align_cemera=0, align_z_diff=0):
+    def transform_tool_coord(self, coord, align_camera=0, align_z_diff=0, joint_valid=True):
         """
         工具坐标转换成法兰坐标
         工具默认使用夹爪对齐;
-        align_cemera=1的情况下，使用相机对齐
+        align_camera=1的情况下，使用相机对齐
 
         :param coord: 相机坐标系的坐标
-        :param align_cemera:
-            欺骗参数，align_cemera=1， 让【相机】成为末端工具去对齐物料， 把 gripper_offset 设置为 camera_offset，
+        :param align_camera:
+            欺骗参数，align_camera=1， 让【相机】成为末端工具去对齐物料， 把 gripper_offset 设置为 camera_offset，
             同时使用 align_z_diff 代替z_diff
         """
         try:
@@ -1099,7 +1105,7 @@ class Controller(QThread):
             robot_joints = self.last_joint_status
             elbow_config = real_time_point.get("config", "elbow_up")
 
-            if align_cemera:
+            if align_camera:
                 logger.info("cheat camera...")
                 gripper_offset = camera_offset
                 z_diff = align_z_diff
@@ -1116,7 +1122,8 @@ class Controller(QThread):
                 robot_params=robot_params,
                 cam_rotation=cam_cfg.get("rotation", 0),
                 gripper_install_angle=gripper_install_angle,
-                angle_offset=angle_offset
+                angle_offset=angle_offset,
+                joint_valid=joint_valid,
             )
 
             return target_coord
@@ -1250,11 +1257,6 @@ class Controller(QThread):
             res_status = result.get("res", "error")
             coords = result.get("coords", [])
 
-            # === 情况 A: 视觉 NG ===
-            # if res_status != "ok":
-            #     logger.error(f"视觉返回 NG: {res_status}")
-            #     return False
-
             # === 状态分支处理 ===
             if res_status == "error":
                 logger.error(f"视觉返回 硬件/算法异常 (ERROR)")
@@ -1286,7 +1288,7 @@ class Controller(QThread):
                 # 公式：Target_Z = Curr_Z - (zc - 400)
                 # 这等同于在 compute_gripper_target 中传入 z_diff = 400
                 z_target_diff = const.PRECISE_PHOTO_DISTANCE
-                approach_coord = self.transform_tool_coord(target_relative, align_cemera=1, align_z_diff=z_target_diff)
+                approach_coord = self.transform_tool_coord(target_relative, align_camera=1, align_z_diff=z_target_diff)
                 if not approach_coord:
                     logger.error("逼近点逆解失败")
                     return "ERROR"
@@ -1319,7 +1321,7 @@ class Controller(QThread):
                 if photo_type == const.photo_type_find_head:
                     # 找端头模式, 使用【相机】对齐目标
                     # 传入 cheat_gripper_offset 标志 (需在 transform_tool_coord 内部实现，让夹爪offset = 相机offset)
-                    trans_coord = self.transform_tool_coord(coord, align_cemera=1)
+                    trans_coord = self.transform_tool_coord(coord, align_camera=1)
                 else:
                     # 普通模式，使用【夹爪】对齐目标
                     trans_coord = self.transform_tool_coord(coord)
@@ -1329,10 +1331,9 @@ class Controller(QThread):
                     return "ERROR"
                 transform_coords.append(trans_coord)
 
-            # 只保存，不移动
+            # 保存转换后的视觉坐标，供运动动作读取
             # eg：保存到 0x4008C (动作76) 的名下，供 77 读取
             if photo_type in (const.photo_type_loading, const.photo_type_find_head, const.photo_type_unloading):
-                # self.save_vision_data(process_addr, coords)
                 self.save_vision_data(process_addr, transform_coords, photo_type=photo_type)
 
             return "OK"  # eg: 动作 76 任务完成
@@ -1632,7 +1633,8 @@ class Controller(QThread):
         logger.critical("料架全空！请更换料车！")
 
         # 1. 内部状态重置
-        self.loading_index.reset_search_index()  # 自动复位，准备迎接新料车
+        self.loading_index.reset_search_index(const.search_index_name, const.search_index_name)  # 自动复位，准备迎接新料车
+        self.loading_index.reset_search_index(const.head_layer_index_name, const.search_index_name)  # 自动复位，准备迎接新料车
         self.need_rack_mapping = True  # 要求换料车后重新扫描
 
         # 2. 终止当前业务动作
@@ -1668,7 +1670,9 @@ class Controller(QThread):
         COLS_PER_LAYER = const.product_cols_per_layer
         # 每一层的固定落差
         LAYER_GAP = const.product_height + const.interval_height  # 177.0 mm (物料 + 木条)
+        # 基础高度，相机到物料的拍摄距离
         BASE_DEPTH = const.base_depth
+        # 可信深度，需要加上容差
         MAX_RELIABLE_DEPTH = BASE_DEPTH + LAYER_GAP + const.tolerange
 
         # 总层数
@@ -1777,7 +1781,7 @@ class Controller(QThread):
 
         if self.loading_index.current_search_index >= len(search_points):
             logger.warning("搜寻索引已越界，自动重置为 0 (可能是新料架)")
-            self.loading_index.reset_search_index()
+            self.loading_index.reset_search_index(const.reset_search_index)
 
         # ==========================================
         # 1. 初始化扫描判定
@@ -1793,7 +1797,7 @@ class Controller(QThread):
                 return self._handle_empty_rack_and_wait(process_addr)
 
             # 扫描成功，覆盖当前的搜寻索引
-            self.loading_index.save_search_index(target_idx)
+            self.loading_index.save_search_index(const.search_index_name, target_idx)
             # 关闭映射标志，后续的动作直接按照索引往下抓即可
             self.need_rack_mapping = False
 
@@ -1852,7 +1856,7 @@ class Controller(QThread):
                 if vision_res == "OK":
                     # 找到了！保存进度，下次还从这个视野开始找 (因为一个视野可能有两个料)
                     # 或者如果一个视野只抓一次，可以存 i + 1。这里假设存 i
-                    self.loading_index.save_search_index(i)
+                    self.loading_index.save_search_index(const.search_index_name, i)
 
                     logger.info("=========================================")
                     logger.info("端头已找到！准备平移 1020mm 进行精确定位")
@@ -1950,6 +1954,171 @@ class Controller(QThread):
         # 如果 for 循环正常结束，说明所有点都拍完了，全是 "EMPTY"
         # ==========================================
         return self._handle_empty_rack_and_wait(process_addr)
+
+    def execute_option1_vision_sequence(self, process_addr, config_data, loading, photo_type=None):
+        """
+        方案一执行引擎：端头群拍 -> 提取坐标 -> 纯视觉Y+平移 -> 二次精拍
+        """
+        if self.check_estop(): return False
+
+        head_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("layer_head_points", [])
+
+        if not head_points:
+            logger.error("配置缺失：未找到端头拍照点 (layer_head_points)")
+            return False
+
+        # 1. 获取平移参数
+        # y_offset_dist = config_data.get("product_y_offset", 1020.0)
+        y_offset_dist = const.product_y_offset
+
+        # 2. 读取记忆的层数 (假设你已经有了 current_layer_index 属性)
+        start_layer = getattr(self.loading_index, 'current_head_layer_index', 0)
+        start_layer = max(0, min(start_layer, len(head_points) - 1))
+
+        # =======================================================
+        # 阶段 1：逐层寻找端头
+        # =======================================================
+        found_layer_idx = -1
+        valid_materials_base_coords = []
+
+        for layer_idx in range(start_layer, len(head_points)):
+            if self.check_estop(): return False
+
+            head_pt = head_points[layer_idx]
+            logger.info(f"--- [阶段1] 前往第 {layer_idx} 层端头群拍点: {head_pt.get('name')} ---")
+
+            while self.running:
+                if self.check_estop(): return False
+
+                # 1. 移动到端头拍照点
+                if not self._move_segment_to_target(process_addr, target_point=head_pt):
+                    return False
+
+                # 2. 触发端头群拍 (ptype=5: 找端头模式，不转换夹爪坐标)
+                vision_res = self.handle_vision_recursive_v1(process_addr, head_pt, loading,
+                                                             photo_type=const.photo_type_find_head)
+
+                if vision_res == "OK":
+                    p_head_data = self.get_vision_data(process_addr, photo_type=const.photo_type_find_head)
+                    if p_head_data:
+                        logger.info(f"第 {layer_idx} 层端头发现 {len(p_head_data)} 根物料！")
+
+                        # 将相机相对坐标转换为法兰基座标系绝对坐标
+                        for raw_coord in p_head_data:
+                            # align_camera=True 表示让相机镜头对准端头，而不是夹爪
+                            base_coord = self.transform_tool_coord(raw_coord, align_camera=1)
+                            if base_coord:
+                                valid_materials_base_coords.append(base_coord)
+
+                        found_layer_idx = layer_idx
+                        # 保存层数记忆 (因为每次都重新拍整层，所以只记层数即可)
+                        self.loading_index.current_head_layer_index = layer_idx
+                        self.loading_index.save_search_index(const.head_layer_index_name, layer_idx)
+                        break  # 跳出 while 重试循环
+                    else:
+                        logger.error("视觉返回OK，但无法获取端头坐标数据")
+
+                elif vision_res == "EMPTY":
+                    logger.info(f"第 {layer_idx} 层端头无料，准备下探...")
+                    break  # 跳出 while，执行外层 for 的下一层
+
+                else:  # "ERROR"
+                    self.plc.write_register(process_addr, 16)
+                    logger.warning("端头视觉异常 (16)，等待复位 (20)...")
+                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                        continue
+                    else:
+                        return False
+
+            # 如果在这一层找到了料，跳出下探循环
+            if found_layer_idx != -1:
+                break
+
+        if found_layer_idx == -1:
+            # 7 层全空，执行报警与复位逻辑
+            self.loading_index.current_head_layer_index = 0
+            self.loading_index.reset_search_index(const.head_layer_index_name)
+
+            return self._handle_empty_rack_and_wait(process_addr)
+
+        # =======================================================
+        # 阶段 2：直接依据视觉 X 生成精拍点
+        # =======================================================
+        logger.info("=========================================")
+        logger.info("端头已找到！依据视觉 X 坐标平移生成精拍点")
+
+        # 排序：根据你的抓取策略，决定先抓哪一根。
+        # 假设基座标 X 轴对应物料的横向排列，我们按 X 坐标从小到大排序 (从一侧抓到另一侧)
+        valid_materials_base_coords.sort(key=lambda item: item[0])
+
+        # 始终取排序后的第一根物料进行抓取
+        target_mat_coord = valid_materials_base_coords[0]
+        mat_x, mat_y, mat_z, mat_r = target_mat_coord
+
+        # 【核心逻辑】：X 直接用视觉结果，Y 加上平移量
+        fine_target_x = mat_x
+        fine_target_y = mat_y + y_offset_dist  # 例如 + 1020.0
+
+        # Z轴高度保持端头拍照点的安全高度，防止平移过程撞机
+        safe_z = head_pt["coords"][2]
+        config_curr = head_pt.get("config", "elbow_up")
+
+        # 逆解计算 J4 补偿角，保证姿态不变
+        j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
+            fine_target_x, fine_target_y, safe_z, const.fine_photo_world_angle,
+            self.l1, self.l2, self.z0, self.nn3,
+            elbow_config=config_curr
+        )
+
+        if j4 is None:
+            logger.error(f"计算精拍点 J4 失败，目标可能超出机械臂极限")
+            return False
+
+        fine_photo_pt = {
+            "name": f"Fine_Photo_L{found_layer_idx}_X{fine_target_x:.0f}",
+            "coords": [fine_target_x, fine_target_y, safe_z, j4],
+            "config": config_curr,
+            "photo": 1  # 触发精拍
+        }
+
+        logger.info(f"生成精拍点: X={fine_target_x:.1f}, Y={fine_target_y:.1f}, Z={safe_z:.1f}")
+
+        # =======================================================
+        # 阶段 3：执行精拍与抓取
+        # =======================================================
+        while self.running:
+            if self.check_estop(): return False
+
+            # 1. 平移到精拍点
+            if not self._move_segment_to_target(process_addr, target_point=fine_photo_pt, interpolate=True):
+                return False
+
+            # 2. 在精拍点触发真实的单根物料抓取识别 (算出夹爪的真实抓取坐标)
+            final_vision_res = self.handle_vision_recursive_v1(process_addr, fine_photo_pt, loading,
+                                                               photo_type=const.photo_type_loading)
+
+            if final_vision_res == "OK":
+                logger.info("精确定位成功！最终抓取坐标已保存。")
+                self.last_motion_end_point = fine_photo_pt
+                self.plc.write_register(process_addr, 13)
+                return True
+
+            elif final_vision_res == "EMPTY":
+                logger.error("精拍发现位置为空！(可能因视觉 X 畸变导致跑偏)")
+                self.plc.write_register(process_addr, 16)
+                if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                    return False  # 退出，重新拍端头找
+                return False
+
+            else:
+                self.plc.write_register(process_addr, 16)
+                logger.warning("精拍异常 (16)，等待复位 (20)...")
+                if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                    continue
+                return False
+
+        return False
+
 
     # 设备初始化
     def handle_process_0x400A7(self, process_addr, value):
@@ -2487,7 +2656,7 @@ class Controller(QThread):
         way_point_down = self.move_up_down(way_point_forward, -100)
 
         # points = [process_start_point, way_point_up, way_point_forward, way_point_down]
-        points = [process_start_point, wp1, wp2, wp3, wp4]
+        points = [process_start_point, wp1]
 
         """
         # 1、从实时点移动到目标点后面50mm处
@@ -3109,3 +3278,86 @@ class Controller(QThread):
         # 将当前动作的最后一个点，标记为下一次动作的起点
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
+
+
+def main():
+    camera_coord = [-192.65, 32.65, 400, 0.0]
+    head_pt = {
+        "name": "L1_Head",
+        "coords": [
+            -53.41,
+            259.91,
+            70.07,
+            -115.54
+        ],
+        "photo": 0,
+        "config": "elbow_up"
+    }
+
+    control_obj = Controller()
+
+    control_obj.robot_params = control_obj.cfg_manager.get_robot_params()
+    control_obj.l1 = control_obj.robot_params.get('l1')
+    control_obj.l2 = control_obj.robot_params.get('l2')
+    control_obj.z0 = control_obj.robot_params.get('z0')
+    control_obj.nn3 = control_obj.robot_params.get('nn3')
+
+    plc_cfg = control_obj.cfg_manager.get_plc_config()
+    control_obj.plc = PLCClient(plc_cfg["ip"], plc_cfg["port"])
+
+    logger.info("机器人后台控制服务启动...")
+    if not control_obj.plc.connect():
+        logger.error("PLC 连接失败，线程退出")
+        return  # 连接失败直接退出线程
+
+
+    target_mat_coord = control_obj.transform_tool_coord(camera_coord, align_camera=1, joint_valid=False)
+    print(f"target_mat_coord is: {target_mat_coord}")
+    mat_x, mat_y, mat_z, mat_r = target_mat_coord
+    y_offset_dist = const.product_y_offset
+
+    # 【核心逻辑】：X 直接用视觉结果，Y 加上平移量
+    fine_target_x = mat_x
+    fine_target_y = mat_y + y_offset_dist  # 例如 + 1020.0
+
+    # Z轴高度保持端头拍照点的安全高度，防止平移过程撞机
+    safe_z = head_pt["coords"][2]
+    config_curr = head_pt.get("config", "elbow_up")
+
+    # 逆解计算 J4 补偿角，保证姿态不变
+    j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
+        fine_target_x, fine_target_y, safe_z, const.fine_photo_world_angle,
+        control_obj.l1, control_obj.l2, control_obj.z0, control_obj.nn3,
+        elbow_config=config_curr
+    )
+
+    if j4 is None:
+        logger.error(f"计算精拍点 J4 失败，目标可能超出机械臂极限")
+        return False
+
+    found_layer_idx = 0
+    fine_photo_pt = {
+        "name": f"Fine_Photo_L{found_layer_idx}_X{fine_target_x:.0f}",
+        "coords": [fine_target_x, fine_target_y, safe_z, j4],
+        "config": config_curr,
+        "photo": 1  # 触发精拍
+    }
+
+    logger.info(f"生成精拍点: X={fine_target_x:.1f}, Y={fine_target_y:.1f}, Z={safe_z:.1f}")
+    print(f"精拍点: {fine_photo_pt}")
+    logger.info(fine_photo_pt)
+
+    xe, ye, ze, te = fine_photo_pt["coords"]
+    l1 = control_obj.l1
+    l2 = control_obj.l2
+    z0 = control_obj.z0
+    nn3 = control_obj.nn3
+
+    ik = ScaraKinematics().inverse_kinematics_v2(xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up')
+    if not ik:
+        print(f"目标点逆解失败")
+    else:
+        print(f"目标点可达: {ik}")
+
+if __name__ == "__main__":
+    main()

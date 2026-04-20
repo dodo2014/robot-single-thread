@@ -113,7 +113,7 @@ class ScaraKinematics:
             raise Exception(f"逆运动学求解错误: {e}")
 
     @staticmethod
-    def inverse_kinematics_v2(xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up'):
+    def inverse_kinematics_v2(xe, ye, ze, te, l1, l2, z0, nn3, config_type='elbow_up', joint_valid=True):
         """
         计算SCARA机械臂的逆运动学解 (使用几何解析法), 高性能版
         此方法求得的the2, 定义为第二根连杆相对于第一根连杆的相对角度
@@ -220,7 +220,7 @@ class ScaraKinematics:
             theta2_deg = math.degrees(theta2)
 
             # --- 核心限位校验拦截 ---
-            if not ScaraKinematics.validate_joint_limits(theta1_deg, theta2_deg, theta4):
+            if joint_valid and not ScaraKinematics.validate_joint_limits(theta1_deg, theta2_deg, theta4):
                 logger.warning(
                     f"[{config_type}] 逆解算成功，但结果超出物理限位: J1={theta1_deg:.2f}, J2={theta2_deg:.2f}, J4={theta4:.2f}")
                 return None

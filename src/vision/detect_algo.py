@@ -11,6 +11,7 @@ from src.vision.orbbec_camera import OrbbecCameraDevice
 from src.depthSegmentPython.RGBDDepthSegmenterWrap import RGBDDetector
 from src.utils.path_helper import get_camera_img_dir, get_logs_dir
 from src.utils import logger
+from src.utils import detector_logger
 from src.consts import const
 
 # 导入编译好的 C++ 模块 (cpp_algo.so)
@@ -159,6 +160,7 @@ class DetectAlgoService:
                 continue
 
             if not detect:
+                logger.info(f"Detect denied ...")
                 return {"code": 0, "result": {"ok": 1, "coords": [0, 0, 0, 0]}, "err_msg": ""}
 
             try:
@@ -246,6 +248,7 @@ class DetectAlgoService:
                     cv2.waitKey(0)
 
                 logger.info(f"detect result : {result}")
+                detector_logger.info(f"detect result : {result}")
 
                 # 显式释放底层 C++ 帧缓冲！！非常重要！！
                 # 让 pyorbbecsdk 立即将 Buffer 归还给 SDK，防止缓存池枯竭
@@ -290,7 +293,7 @@ class DetectAlgoService:
             return {"code":-99, "err_msg":f"检测异常: 中位数处理返回空数组"}
 
         # 上下料，y, z取中位数，r取平均值
-        if ptype in (const.photo_type_loading, const.photo_type_unloading):
+        if ptype in (const.photo_type_loading, const.photo_type_unloading, const.photo_type_find_head):
             n = len(results)
             mid = n // 2
 
@@ -320,6 +323,8 @@ class DetectAlgoService:
                 for item in sorted_z_result:
                     f.write(f"{item}\n")
                 f.write(f"midian_result: {midian_result}\n")
+
+            detector_logger.info(f"midian_result: {midian_result}")
 
             return midian_result
 
@@ -393,8 +398,9 @@ def main():
         #     time.sleep(2)
 
         start_time = round(time.time() * 1000)
-        # response = service.execute_detection(ptype=2)
-        response = service.execute_detection_midian_depth(ptype=2)
+        # response = service.execute_detection(ptype=const.photo_type_loading)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         print(response)
 
         # 处理结果
@@ -405,8 +411,7 @@ def main():
             print(f"Detection Failed: {response['err_msg']}")
         end_time = round(time.time() * 1000)
         print(f"Detection Time: {end_time - start_time}")
-        with open(f"{get_logs_dir()}/detect_algo.log", "a+") as f:
-            f.write(f"Detection Time: {end_time - start_time}\n")
+        detector_logger.info(f"Detection Time: {end_time - start_time}")
 
     finally:
         service.shutdown()

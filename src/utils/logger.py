@@ -6,7 +6,7 @@ import datetime
 import os
 
 
-def setup_logger():
+def setup_logger(logfile="robot_log"):
     """配置日志系统，按天切分日志文件"""
     # 确保logs目录存在
     # log_dir = "logs"
@@ -15,10 +15,10 @@ def setup_logger():
         os.makedirs(log_dir)
 
     # 日志文件名格式：logs/robot_log_年_月_日.txt
-    log_filename = os.path.join(log_dir, f"robot_log_{datetime.datetime.now().strftime('%Y_%m_%d')}.log")
+    log_filename = os.path.join(log_dir, f"{logfile}_{datetime.datetime.now().strftime('%Y_%m_%d')}.log")
 
     # 创建logger实例
-    logger = logging.getLogger('RobotControl')
+    logger = logging.getLogger(logfile)
     logger.setLevel(logging.INFO)
     logger.propagate = False  # 防止重复输出
 
@@ -50,4 +50,5 @@ def setup_logger():
 
 
 # 初始化全局logger
-logger = setup_logger()
+logger = setup_logger(logfile="robot_log")
+detector_logger = setup_logger(logfile="detector_log")
