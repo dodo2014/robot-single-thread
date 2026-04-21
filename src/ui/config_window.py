@@ -6,13 +6,46 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGroupBox, QFormLayout, QLabel, QLineEdit, QPushButton,
                              QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
                              QSplitter, QListWidget, QMessageBox, QComboBox, QInputDialog,
-                             QTreeWidget, QTreeWidgetItem, QFrame)
+                             QTreeWidget, QTreeWidgetItem, QFrame, QDialog, QDialogButtonBox)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from src.utils.config_manager import CONFIG_FILE
 
 
-# ADDR_FEEDBACK_START = 0x400BE
-# FEEDBACK_LEN = 8  # 4个float = 8个寄存器
+class GroupInputDialog(QDialog):
+    """自定义对话框：用于同时输入分组名称和 JSON Key"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("新建点位分组")
+        self.setMinimumWidth(350)
+
+        # 主布局
+        layout = QVBoxLayout(self)
+
+        # 表单布局存放输入框
+        form_layout = QFormLayout()
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("例如: 扫码点位")
+        form_layout.addRow("显示名称:", self.name_edit)
+
+        self.key_edit = QLineEdit()
+        self.key_edit.setPlaceholderText("要求全英文/下划线，例如: barcode_points")
+        form_layout.addRow("JSON Key:", self.key_edit)
+
+        layout.addLayout(form_layout)
+
+        # 确定和取消按钮
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+
+        layout.addWidget(self.button_box)
+
+    def get_data(self):
+        """返回用户输入的数据 (display_name, json_key)"""
+        return self.name_edit.text().strip(), self.key_edit.text().strip()
+
 
 class ConfigEditorUI(QMainWindow):
     def __init__(self, controller_instance):
@@ -246,17 +279,33 @@ class ConfigEditorUI(QMainWindow):
 
         right_layout.addLayout(form_proc_info)
 
-        # # 点位表格
-        # self.table_points = QTableWidget()
-        # self.table_points.setColumnCount(7)
-        # self.table_points.setHorizontalHeaderLabels(["点名称", "X", "Y", "Z", "R (te)", "Photo", "姿态"])
-        # header = self.table_points.horizontalHeader()
-        # header.setSectionResizeMode(QHeaderView.Stretch)
-        #
-        # # header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        # right_layout.addWidget(self.table_points)
+        # ========================================================
+        # 2. 【新增】分组管理工具栏 (在 Tab 上方)
+        # ========================================================
+        group_toolbar = QHBoxLayout()
 
-        # 【核心修改】创建内部 TabWidget 管理两个表格
+        btn_add_group = QPushButton("+ 新建点位分组")
+        btn_edit_group = QPushButton("✎ 编辑当前分组")
+        btn_del_group = QPushButton("- 删除当前分组")
+
+        # 稍微设置一下样式区分
+        btn_add_group.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        btn_del_group.setStyleSheet("color: #F44336;")
+
+        btn_add_group.clicked.connect(self.add_point_group)
+        btn_edit_group.clicked.connect(self.edit_point_group)
+        btn_del_group.clicked.connect(self.delete_point_group)
+
+        group_toolbar.addWidget(btn_add_group)
+        group_toolbar.addWidget(btn_edit_group)
+        group_toolbar.addWidget(btn_del_group)
+        group_toolbar.addStretch()  # 靠左对齐
+
+        right_layout.addLayout(group_toolbar)
+
+        right_layout.addSpacing(15)  # 15px 的留白间距，可自行调大调小
+
+        # 创建内部 TabWidget 管理两个表格
         self.tabs_points = QTabWidget()
 
         self.tabs_points.setStyleSheet(
@@ -288,17 +337,21 @@ class ConfigEditorUI(QMainWindow):
             """
         )
 
-        # 1. 普通点位
-        self.table_normal_points = self._create_points_table()
-        self.tabs_points.addTab(self.table_normal_points, "普通点位")
-
-        # 2. 阵列搜寻点位
-        self.table_search_points = self._create_points_table()
-        self.tabs_points.addTab(self.table_search_points, "上料阵列搜寻点位")
-
-        # 3. 翻肘安全过渡点位
-        self.table_flip_points = self._create_points_table()
-        self.tabs_points.addTab(self.table_flip_points, "上料翻肘过渡点位")
+        # # 1. 普通点位
+        # self.table_normal_points = self._create_points_table()
+        # self.tabs_points.addTab(self.table_normal_points, "普通点位")
+        #
+        # # 2. 阵列搜寻点位
+        # self.table_search_points = self._create_points_table()
+        # self.tabs_points.addTab(self.table_search_points, "上料阵列搜寻点位")
+        #
+        # # 3. 翻肘安全过渡点位
+        # self.table_flip_points = self._create_points_table()
+        # self.tabs_points.addTab(self.table_flip_points, "上料翻肘过渡点位")
+        #
+        # # 4. 上料端头搜寻点位
+        # self.table_layer_head_points = self._create_points_table()
+        # self.tabs_points.addTab(self.table_layer_head_points, "上料端头搜寻点位")
 
         right_layout.addWidget(self.tabs_points)
 
@@ -798,9 +851,12 @@ class ConfigEditorUI(QMainWindow):
             self.lbl_proc_type.clear()
             self.lbl_proc_d_addr.clear()
 
-            self.table_normal_points.setRowCount(0)
-            self.table_search_points.setRowCount(0)
-            self.table_flip_points.setRowCount(0)
+            # self.table_normal_points.setRowCount(0)
+            # self.table_search_points.setRowCount(0)
+            # self.table_flip_points.setRowCount(0)
+            # self.table_layer_head_points.setRowCount(0)
+
+            self.tabs_points.clear()  # 清空所有 Tab
             return
 
         pid = current_item.text(0)
@@ -825,53 +881,53 @@ class ConfigEditorUI(QMainWindow):
 
         self.lbl_proc_d_addr.setText(str(d_addr))
 
-        """
-        points = process_data.get('points', [])
-        self.table_points.setRowCount(len(points))
+        # # 【核心修改】分别填充两个表格
+        # normal_points = process_data.get('points', [])
+        # search_points = process_data.get('search_points', [])
+        # flip_via_points = process_data.get('flip_via_points', [])  # 新增读取
+        # layer_head_points = process_data.get('layer_head_points', [])
+        #
+        # self._populate_points_table(self.table_normal_points, normal_points)
+        # self._populate_points_table(self.table_search_points, search_points)
+        # self._populate_points_table(self.table_flip_points, flip_via_points)  # 新增填充
+        # self._populate_points_table(self.table_layer_head_points, layer_head_points)
 
-        # 临时关闭排序功能，防止填充时乱跳
-        self.table_points.setSortingEnabled(False)
+        # ========================================================
+        # 动态渲染 Tab 分组
+        # ========================================================
+        self.tabs_points.clear()  # 切换动作时，先清空旧的 Tab
 
-        for i, pt in enumerate(points):
-            # print("#######################")
-            # print(pt)
-            self.table_points.setItem(i, 0, QTableWidgetItem(str(pt.get('name', ''))))
-            coords = pt.get('coords', [0, 0, 0, 0])
-            for j in range(4):
-                # 格式化一下，保留2位小数显示
-                val = f"{coords[j]:.2f}"
-                self.table_points.setItem(i, j + 1, QTableWidgetItem(val))
-            self.table_points.setItem(i, 5, QTableWidgetItem(str(pt.get('photo', 0))))
+        # 1. 获取或初始化分组元数据
+        # 默认的 4 个经典分组，保证向下兼容旧配置文件
+        default_groups_meta = {
+            "points": "普通点位"
+            # "search_points": "阵列搜寻点位",
+            # "flip_via_points": "翻肘过渡点位",
+            # "layer_head_points": "端头搜寻点位"
+        }
 
-            #  === 【新增】设置姿态下拉框 ===
-            current_config = pt.get('config', 'elbow_up')
+        groups_meta = process_data.get("groups_meta")
+        if not groups_meta:
+            groups_meta = default_groups_meta
 
-            # combo_config = QComboBox()
-            # combo_config.addItems(["elbow_up", "elbow_down"])
-            #
-            # # 获取当前点的配置，默认为 up
-            # # 选中对应的值
-            # index = combo_config.findText(current_config)
-            # if index >= 0:
-            #     combo_config.setCurrentIndex(index)
-            # else:
-            #     combo_config.setCurrentIndex(0)  # 默认 up
-            #
-            # # 将下拉框放入单元格 (第6列，即第7个)
-            # self.table_points.setCellWidget(i, 6, combo_config)
+        # 2. 遍历元数据，动态创建 Tab 和 表格
+        for json_key, display_name in groups_meta.items():
+            # 创建标准表格
+            table = self._create_points_table()
 
-            self._set_row_elbow_combo(i, current_val=current_config)
+            # 【魔法属性】给 table 对象强行绑定这两个属性，保存时非常有用！
+            table.json_key = json_key
+            table.display_name = display_name
 
-        self.table_points.setSortingEnabled(False)  # 表格通常不需要排序，容易乱序
-        """
-        # 【核心修改】分别填充两个表格
-        normal_points = process_data.get('points', [])
-        search_points = process_data.get('search_points', [])
-        flip_via_points = process_data.get('flip_via_points', [])  # 新增读取
+            # 从 JSON 中提取该 key 对应的点位数组 (没有则为空列表)
+            points_data = process_data.get(json_key, [])
 
-        self._populate_points_table(self.table_normal_points, normal_points)
-        self._populate_points_table(self.table_search_points, search_points)
-        self._populate_points_table(self.table_flip_points, flip_via_points)  # 新增填充
+            # 填充表格数据 (复用你现有的辅助函数)
+            self._populate_points_table(table, points_data)
+
+            # 添加到 TabWidget，标签文字为 "显示名 (key)"
+            tab_title = f"{display_name}"
+            self.tabs_points.addTab(table, tab_title)
 
     def add_process_item(self):
         """新增一个动作流程"""
@@ -902,7 +958,10 @@ class ConfigEditorUI(QMainWindow):
                 "name": "新建动作流程",
                 "type": "standard_move",
                 "d_addr": d_val,  # 默认存入
-                "points": []
+                "points": [],
+                "groups_meta": {
+                    "points": "普通点位"
+                }
             }
 
             # 3. 更新内存数据
@@ -1095,6 +1154,103 @@ class ConfigEditorUI(QMainWindow):
     #     if current_row >= 0:
     #         self.table_points.removeRow(current_row)
 
+    # === 动态分组管理槽函数 ===
+
+    def add_point_group(self):
+        """新建点位分组"""
+        if not self.tree_processes.currentItem():
+            QMessageBox.warning(self, "提示", "请先在左侧选择一个动作！")
+            return
+
+
+        # 1. 弹出自定义对话框
+        dialog = GroupInputDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            # 2. 获取用户输入的两个值
+            display_name, json_key = dialog.get_data()
+
+            # 空值校验
+            if not display_name or not json_key:
+                QMessageBox.warning(self, "警告", "显示名称和 JSON Key 均不能为空！")
+                return
+
+
+            # 防重校验：检查现有的 tab 里有没有这个 key
+            for i in range(self.tabs_points.count()):
+                if getattr(self.tabs_points.widget(i), "json_key", "") == json_key:
+                    QMessageBox.warning(self, "错误", f"Key '{json_key}' 已存在！请使用其他英文名。")
+                    return
+
+            # 创建新表格
+            table = self._create_points_table()
+
+            # 绑定属性
+            table.json_key = json_key
+            table.display_name = display_name
+
+            # 添加到 UI (不自动保存，等用户点大保存按钮才写入文件)
+            tab_title = f"{display_name}"
+            self.tabs_points.addTab(table, tab_title)
+
+            # 跳转到新 Tab
+            self.tabs_points.setCurrentIndex(self.tabs_points.count() - 1)
+
+    def edit_point_group(self):
+        """编辑当前分组信息 (只允许改显示名称，禁止改Key防错)"""
+        current_idx = self.tabs_points.currentIndex()
+        if current_idx < 0: return
+
+        table = self.tabs_points.widget(current_idx)
+        old_name = getattr(table, "display_name", "")
+        json_key = getattr(table, "json_key", "")
+
+        new_name, ok = QInputDialog.getText(self, "编辑分组名称", f"Key: {json_key}\n请输入新的显示名称:",
+                                            text=old_name)
+        if ok and new_name.strip():
+            new_name = new_name.strip()
+            # 更新属性
+            table.display_name = new_name
+            # 更新 Tab 文字
+            self.tabs_points.setTabText(current_idx, f"{new_name}")
+
+    def delete_point_group(self):
+        """删除当前分组"""
+        current_idx = self.tabs_points.currentIndex()
+        if current_idx < 0: return
+
+        table = self.tabs_points.widget(current_idx)
+        display_name = getattr(table, "display_name", "")
+        json_key = getattr(table, "json_key", "")
+
+        if json_key == "points":
+            QMessageBox.warning(
+                self,
+                "禁止删除",
+                f"无法删除分组【{display_name}】！\n\n该分组为默认分组"
+            )
+            return
+
+        if table.rowCount() > 0:
+            QMessageBox.warning(
+                self,
+                "禁止删除",
+                f"无法删除分组【{display_name}】！\n\n该分组下仍有 {table.rowCount()} 个点位数据。\n请先手动删除该分组下的所有点位，然后再尝试删除此分组。"
+            )
+            return
+
+        reply = QMessageBox.warning(
+            self, "危险操作确认",
+            f"确定要删除分组【{display_name} ({json_key})】吗？\n\n警告：该分组下的所有点位数据将被丢弃！\n(点击右下角[保存当前动作]后真正生效)",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            # 只在 UI 上移除。只要用户最后点了保存，这个组就不会被提取存入 JSON，达到了删除的目的
+            self.tabs_points.removeTab(current_idx)
+            # 注意：旧的 JSON 里那个 Key 对应的数据还在，如果不去专门清理 dict，它会变成冗余数据
+            # 最干净的做法是在 save 时，用新的 key 覆盖，旧的 key (不在 tabs_points 里的) 最好 del 掉。
+            # 为了简化，我们上面写的 save_current_process 采用的是“提取现有Tab重写”的逻辑。
+
     def add_point_row(self):
         active_table = self._get_current_active_table()
         current_row = active_table.currentRow()
@@ -1143,69 +1299,6 @@ class ConfigEditorUI(QMainWindow):
         except ValueError:
             QMessageBox.warning(self, "错误", "请输入有效的数字")
 
-    # def save_current_process(self):
-    #     """保存 Tab 2 的表格数据到 json"""
-    #     current_item = self.tree_processes.currentItem()
-    #     if not current_item:
-    #         return
-    #
-    #     # current_item.text(0)，表示获取第0列的文本
-    #     pid = current_item.text(0)
-    #
-    #     new_points = []
-    #
-    #     try:
-    #         rows = self.table_points.rowCount()
-    #         for i in range(rows):
-    #             name = self.table_points.item(i, 0).text()
-    #             x = float(self.table_points.item(i, 1).text())
-    #             y = float(self.table_points.item(i, 2).text())
-    #             z = float(self.table_points.item(i, 3).text())
-    #             r = float(self.table_points.item(i, 4).text())
-    #             photo = int(self.table_points.item(i, 5).text())
-    #
-    #             combo = self.table_points.cellWidget(i, 6)
-    #             if combo:
-    #                 config_val = combo.currentText()
-    #             else:
-    #                 config_val = "elbow_up"  # 默认值防止报错
-    #
-    #             new_points.append({
-    #                 "name": name,
-    #                 "coords": [x, y, z, r],
-    #                 "photo": photo,
-    #                 "config": config_val
-    #             })
-    #
-    #         # 更新内存数据
-    #         # 确保 pid 对应的字典存在
-    #         if pid not in self.config_data['processes']:
-    #             self.config_data['processes'][pid] = {}
-    #
-    #         self.config_data['processes'][pid]['name'] = self.lbl_proc_name.text()
-    #         self.config_data['processes'][pid]['type'] = self.lbl_proc_type.text()
-    #
-    #         try:
-    #             d_addr_val = int(self.lbl_proc_d_addr.text())
-    #             self.config_data['processes'][pid]['d_addr'] = d_addr_val
-    #         except ValueError:
-    #             pass  # 如果是 Error 字符串或其他非数字，则不保存
-    #
-    #         self.config_data['processes'][pid]['points'] = new_points
-    #
-    #         self._write_to_file()
-    #
-    #         # 通知后台重载
-    #         if self.controller:
-    #             self.controller.reload_config()
-    #
-    #         QMessageBox.information(self, "成功", "动作已保存，并已通知后台生效")
-    #     except ValueError as e:
-    #         QMessageBox.warning(self, "错误", f"数据格式错误: {e}")
-    #     except Exception as e:
-    #         # 捕获其他未知异常，防止崩溃
-    #         QMessageBox.critical(self, "系统错误", f"保存失败: {str(e)}")
-
     def save_current_process(self):
         """保存 Tab 2 的表格数据到 json"""
         current_item = self.tree_processes.currentItem()
@@ -1215,10 +1308,11 @@ class ConfigEditorUI(QMainWindow):
         pid = current_item.text(0)
 
         try:
-            # 【核心修改】分别从两个表格提取数据
-            new_points = self._extract_points_from_table(self.table_normal_points)
-            new_search_points = self._extract_points_from_table(self.table_search_points)
-            new_flip_points = self._extract_points_from_table(self.table_flip_points)  # 新增提取
+            # # 【核心修改】分别从两个表格提取数据
+            # new_points = self._extract_points_from_table(self.table_normal_points)
+            # new_search_points = self._extract_points_from_table(self.table_search_points)
+            # new_flip_points = self._extract_points_from_table(self.table_flip_points)  # 新增提取
+            # new_layer_head_points = self._extract_points_from_table(self.table_layer_head_points)
 
             # 更新内存数据
             if pid not in self.config_data['processes']:
@@ -1233,11 +1327,50 @@ class ConfigEditorUI(QMainWindow):
             except ValueError:
                 pass
 
-            # 保存表格数据
-            self.config_data['processes'][pid]['points'] = new_points
-            self.config_data['processes'][pid]['search_points'] = new_search_points
-            self.config_data['processes'][pid]['flip_via_points'] = new_flip_points  # 新增保存
+            # # 保存表格数据
+            # self.config_data['processes'][pid]['points'] = new_points
+            # self.config_data['processes'][pid]['search_points'] = new_search_points
+            # self.config_data['processes'][pid]['flip_via_points'] = new_flip_points  # 新增保存
+            # self.config_data['processes'][pid]['layer_head_points'] = new_layer_head_points
 
+            # ========================================================
+            # 【核心逻辑】遍历所有 Tab，动态提取数据并重组 JSON
+            # ========================================================
+            new_groups_meta = {}
+            current_keys_in_tabs = []
+
+            # 遍历当前 TabWidget 中的所有页面 (即所有的 table)
+            for i in range(self.tabs_points.count()):
+                table = self.tabs_points.widget(i)
+
+                # 提取我们在 on_process_selected 时绑定的魔法属性
+                json_key = getattr(table, "json_key", f"custom_group_{i}")
+                display_name = getattr(table, "display_name", f"自定义组 {i}")
+
+                # 记录到新的 meta 字典中
+                new_groups_meta[json_key] = display_name
+                current_keys_in_tabs.append(json_key)
+
+                # 提取表格里的实际点位数据 (复用你现有的辅助函数)
+                points_list = self._extract_points_from_table(table)
+
+                # 将点位数组直接存入 config_data 对应的 key 下
+                self.config_data['processes'][pid][json_key] = points_list
+
+            # 【新增：清理被用户在界面上删除的旧分组数组】
+            # 读取旧的 meta
+            old_meta = self.config_data['processes'][pid].get('groups_meta', {})
+            for old_key in old_meta.keys():
+                # 如果这个旧 key 不在当前界面上的 tab 列表里，说明被删了
+                if old_key not in current_keys_in_tabs:
+                    # 从 json 字典中移除它！
+                    if old_key in self.config_data['processes'][pid]:
+                        del self.config_data['processes'][pid][old_key]
+
+            # 保存元数据
+            self.config_data['processes'][pid]['groups_meta'] = new_groups_meta
+
+            # 写入文件
             self._write_to_file()
 
             # 通知后台重载

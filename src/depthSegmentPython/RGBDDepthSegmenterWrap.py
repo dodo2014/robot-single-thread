@@ -2218,8 +2218,8 @@ class RGBDDetector:
         #     self.feed_depth_min,
         #     self.feed_depth_max
         # )
-        current_depth_min = self.end_depth_min
-        current_depth_max = self.end_depth_max
+        current_depth_min = self.feed_depth_min
+        current_depth_max = self.feed_depth_max
 
         # 边缘检测
         edges_combined, depth_normalized = self._detect_edges_general(
@@ -2243,9 +2243,14 @@ class RGBDDetector:
         )
         
         # 合并线段
-        if horizontal_lines:
-            horizontal_lines = self._merge_lines_general(horizontal_lines, is_horizontal=True)
-        
+        if debug == 1:
+            line_bgr = cv2.cvtColor(depth_normalized, cv2.COLOR_GRAY2BGR)
+            color = (random.randint(40,255), random.randint(40,255), random.randint(40,255))
+            for target_line in horizontal_lines:
+                (x1, y1), (x2, y2) = target_line['points']
+                cv2.line(line_bgr, (int(x1-roi_x_start),int(y1-roi_y_start)), (int(x2-roi_x_start),int(y2-roi_y_start)), color, 2)
+                cv2.imshow("merged_line", line_bgr)
+
         # 构造Region
         regions = []
         min_length = self.feed_min_length
@@ -2269,7 +2274,7 @@ class RGBDDetector:
         
         # 打印排序结果
         for i, r in enumerate(regions):
-            print(f'长边边缘排序后 {i}: layer={r["layer"]}, y={r.get("line_y_avg", 0):.1f}, depth={r["avg_depth"]:.1f}')
+            print(f'长边边缘排序后 {i}: y={r.get("line_y_avg", 0):.1f}, depth={r["avg_depth"]:.1f}')
         
         # 根据产品宽度过滤
         regions_filter = self._filter_regions_by_width(regions, self.product_width)

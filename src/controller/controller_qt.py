@@ -1526,7 +1526,7 @@ class Controller(QThread):
                     # 2. 拍照逻辑处理
                     vision_ok = True
 
-                    if photo_trigger == 1:
+                    if photo_trigger == const.photo_trigger_depth:
                         # 调用视觉逻辑
                         vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
                         if vision_res == "OK":
@@ -1534,7 +1534,7 @@ class Controller(QThread):
                         else:
                             # empty 或者 error
                             vision_ok = False
-                    elif photo_trigger == 2:
+                    elif photo_trigger == const.photo_trigger_ccd:
                         # CCD 相机触发逻辑
                         pos_name = end_point.get("name", "UnknownPos")
                         coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
@@ -1560,7 +1560,7 @@ class Controller(QThread):
                             logger.error(f"[{pos_name}] CCD 响应失败或超时")
                             vision_ok = False
 
-                    elif photo_trigger == 3:
+                    elif photo_trigger == const.photo_trigger_laser:
                         # 激光测距触发逻辑
                         pos_name = end_point.get("name", "UnknownPos")
                         coords = end_point.get("coords", [0.0, 0.0, 0.0, 0.0])
@@ -1955,9 +1955,231 @@ class Controller(QThread):
         # ==========================================
         return self._handle_empty_rack_and_wait(process_addr)
 
-    def execute_option1_vision_sequence(self, process_addr, config_data, loading, photo_type=None):
+    def execute_two_stage_vision_sequence_option_2(self, process_addr, config_data, loading, photo_type):
         """
-        方案一执行引擎：端头群拍 -> 提取坐标 -> 纯视觉Y+平移 -> 二次精拍
+        双阶段视觉执行引擎 (端头群拍 -> 物理X轴映射 -> Y轴平移 -> 二次精拍)
+        方案二
+        用于解决大视野找端头带来的 X 轴畸变问题。
+
+        此方案的特点在于利用原有的精拍阵列搜寻点位，端头找到物料坐标之后，利用转换后的X，计算近似的精拍搜索点位，运动到固定搜索点位拍照
+        """
+        if self.check_estop(): return False
+
+        # 1. 提取配置
+        # head_points = config_data.get("layer_head_points", [])
+        # precise_points = config_data.get("layer_precise_points", [])
+
+        head_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("layer_head_points", [])
+        precise_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("search_points", [])
+
+        if not head_points or not precise_points:
+            logger.error("双阶段视觉配置缺失：未找到端头点或精拍预设点")
+            return False
+
+        # 从记忆层数开始 (如果你需要像之前那样跳过空层)
+        # 这里假设你新增了一个 current_layer_index 变量来记忆
+        # start_layer = getattr(self.loading_index, const.head_layer_index_name, 0)
+
+        cols_per_layer = const.product_cols_per_layer
+        current_idx = self.loading_index.current_search_index
+        start_layer = current_idx // cols_per_layer
+
+        # 确保不越界
+        start_layer = max(0, min(start_layer, len(head_points) - 1))
+
+        # =======================================================
+        # 阶段 1：逐层寻找端头
+        # =======================================================
+        found_layer_idx = -1
+        valid_materials_base_coords = []
+        target_material_base_coord = None  # 直接存放唯一的目标基座标
+
+        for layer_idx in range(start_layer, len(head_points)):
+            if self.check_estop(): return False
+
+            head_pt = head_points[layer_idx]
+            logger.info(f"--- [阶段1] 前往第 {layer_idx} 层端头群拍点: {head_pt.get('name')} ---")
+
+            while self.running:
+                if self.check_estop(): return False
+
+                # 1. 移动到端头群拍点
+                if not self._move_segment_to_target(process_addr=process_addr, target_point=head_pt):
+                    return False
+
+                # 2. 触发端头拍照 (注意 ptype: 找端头模式，视觉内部不要转换夹爪坐标)
+                vision_res = self.handle_vision_recursive_v1(process_addr, head_pt, loading,
+                                                             photo_type=const.photo_type_find_head)
+
+                if vision_res == "OK":
+                    # 找到了！读取这层所有端头的基座标 (假设视觉存入了缓存)
+                    p_head_data = self.get_vision_data(process_addr, photo_type=const.photo_type_find_head)
+
+                    # if p_head_data:
+                    #     logger.info(f"第 {layer_idx} 层端头发现 {len(p_head_data)} 根物料！")
+                    #     valid_materials_base_coords = p_head_data
+                    #     found_layer_idx = layer_idx
+                    #     self.loading_index.current_layer_index = layer_idx  # 保存层数记忆
+                    #     break  # 跳出 while 重试循环
+                    # else:
+                    #     logger.error("视觉返回OK，但无法获取端头坐标数据")
+
+                    if p_head_data and len(p_head_data.get("coords",[])) > 0:
+                        logger.info(f"第 {layer_idx} 层端头发现物料！")
+                        target_material_base_coord = p_head_data.get("coords")[0]
+                        found_layer_idx = layer_idx
+
+                        self.loading_index.current_head_layer_index = layer_idx  # 保存层数记忆
+                        self.loading_index.save_search_index(const.head_layer_index_name, layer_idx)
+                        break  # 跳出 while 重试循环
+                    else:
+                        logger.error("视觉返回OK，但无法获取端头坐标数据")
+                        # 可以当作 ERROR 处理，发16等20
+
+                elif vision_res == "EMPTY":
+                    logger.info(f"第 {layer_idx} 层端头无料，准备下探...")
+                    break  # 跳出 while，执行外层 for 的下一层
+
+                else:  # "ERROR"
+                    self.plc.write_register(process_addr, 16)
+                    logger.warning("端头视觉异常 (16)，等待复位 (20)...")
+                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                        continue
+                    else:
+                        return False
+
+            # 如果在这一层找到了料，就跳出下探循环，进入精拍阶段
+            if found_layer_idx != -1:
+                break
+
+        # 如果所有层都找完了还是没料
+        if found_layer_idx == -1:
+            return self._handle_empty_rack_and_wait(process_addr)
+
+        # =======================================================
+        # 阶段 2：X 轴映射与 Y 轴平移，生成精拍点位
+        # =======================================================
+        logger.info("=========================================")
+        logger.info("端头已找到！开始进行 X 轴映射与 Y 轴平移")
+
+        if not target_material_base_coord:
+            return False
+
+        # 提取当前层预设的 5 个精确卡槽点
+        # cols_per_layer = const.product_cols_per_layer
+        start_idx = found_layer_idx * cols_per_layer
+        end_idx = start_idx + cols_per_layer
+        current_layer_precise_pts = precise_points[start_idx:end_idx]
+
+        # 提取这 5 个预设点的基座标 X 值
+        taught_x_list = [pt["coords"][0] for pt in current_layer_precise_pts]
+
+        target_precise_points = []
+
+        # for mat_base_coord in valid_materials_base_coords:
+        # mat_x, mat_y, mat_z, mat_r = mat_base_coord
+        mat_x, mat_y, mat_z, mat_r = target_material_base_coord
+
+        # 【核心映射算法】：计算视觉 X 与所有 5 个预设 X 的距离，找最近的
+        distances = [abs(mat_x - taught_x) for taught_x in taught_x_list]
+        min_dist_idx = distances.index(min(distances))
+
+        # 计算出这根物料在 35 个点中的全局绝对索引！
+        absolute_item_index = start_idx + min_dist_idx
+
+        matched_taught_pt = current_layer_precise_pts[min_dist_idx]
+
+        logger.info(
+            f"视觉端头 X={mat_x:.1f} -> 映射为槽位 P{min_dist_idx} (预设X={taught_x_list[min_dist_idx]:.1f})")
+
+        # 计算精拍点的绝对坐标
+        # Y = 视觉真实端头 Y + 1020mm
+        target_y = mat_y + const.product_y_offset
+
+        # X, Z 取预设卡槽的安全值
+        target_x = matched_taught_pt["coords"][0]
+        target_z = matched_taught_pt["coords"][2]
+        config_curr = matched_taught_pt.get("config", "elbow_up")
+
+        # 根据定义的末端绝对角度，计算 J4
+        j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
+            target_x, target_y, target_z, const.fine_photo_world_angle,
+            self.l1, self.l2, self.z0, self.nn3,
+            elbow_config=config_curr
+        )
+
+        if j4 is None:
+            logger.error(f"计算精拍点 J4 失败，槽位 P{min_dist_idx} 偏移后可能超限")
+            return False
+
+        fine_photo_pt = {
+            "name": f"Fine_Photo_P{min_dist_idx}",
+            "coords": [target_x, target_y, target_z, j4],
+            "config": config_curr,
+            "photo": 1  # 标记为需要触发精拍
+        }
+        # target_precise_points.append(fine_photo_pt)
+        #
+        # if not target_precise_points:
+        #     logger.error("所有视觉端头映射后均无法生成合法的精拍点！")
+        #     return False
+
+        # =======================================================
+        # 阶段 3：执行精拍与抓取
+        # =======================================================
+        # 为了不破坏原有单根抓取逻辑，我们只取第一个映射成功的点去精拍抓取
+        # 下次请求时，它会重新拍端头，找出剩下的料
+
+        # current_target = target_precise_points[0]
+        current_target = fine_photo_pt
+        logger.info(f"=== [阶段3] 前往精拍点: {current_target['name']} ===")
+
+        while self.running:
+            if self.check_estop(): return False
+
+            # 1. 移动到精拍点
+            if not self._move_segment_to_target(process_addr=process_addr, target_point=current_target):
+                return False
+
+            # 2. 在精拍点触发真实的单根物料抓取识别 (photo_type_loading)
+            # 这次拍照会调用 transform_tool_coord 算出夹爪的真实抓取坐标并保存
+            final_vision_res = self.handle_vision_recursive_v1(process_addr, current_target, loading,
+                                                               photo_type=const.photo_type_loading)
+
+            if final_vision_res == "OK":
+                logger.info("精确定位成功！最终抓取坐标已保存。")
+                # 保存抓取索引
+                self.loading_index.current_search_index = absolute_item_index
+                self.loading_index.save_search_index(const.search_index_name, absolute_item_index)
+
+                self.last_motion_end_point = current_target
+                self.plc.write_register(process_addr, 13)
+                return True
+
+            elif final_vision_res == "EMPTY":
+                # 理论上精拍不该为空，因为端头看到了。如果为空可能是被碰掉了或光线变化
+                logger.error("精拍发现位置为空，异常！")
+                # 视为 ERROR 处理
+                self.plc.write_register(process_addr, 16)
+                if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                    # 收到 20 后，直接 return False 退出当前引擎，让外层/PLC重新发起整个找料流程
+                    return False
+                return False
+
+            else:
+                self.plc.write_register(process_addr, 16)
+                logger.warning("精拍失败 (16)，等待复位 (20)...")
+                if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                    continue
+                return False
+
+        return False
+
+    def execute_two_stage_vision_sequence_option_1(self, process_addr, loading=None, photo_type=None):
+        """
+        上料区，料头拍摄+移动+料身精拍
+        方案一
+        执行引擎：端头群拍 -> 提取坐标 -> 纯视觉Y+平移 -> 二次精拍
         """
         if self.check_estop(): return False
 
@@ -1968,7 +2190,6 @@ class Controller(QThread):
             return False
 
         # 1. 获取平移参数
-        # y_offset_dist = config_data.get("product_y_offset", 1020.0)
         y_offset_dist = const.product_y_offset
 
         # 2. 读取记忆的层数 (假设你已经有了 current_layer_index 属性)
@@ -1980,6 +2201,7 @@ class Controller(QThread):
         # =======================================================
         found_layer_idx = -1
         valid_materials_base_coords = []
+        target_material_base_coord = None  # 直接存放唯一的目标基座标
 
         for layer_idx in range(start_layer, len(head_points)):
             if self.check_estop(): return False
@@ -2000,16 +2222,19 @@ class Controller(QThread):
 
                 if vision_res == "OK":
                     p_head_data = self.get_vision_data(process_addr, photo_type=const.photo_type_find_head)
-                    if p_head_data:
-                        logger.info(f"第 {layer_idx} 层端头发现 {len(p_head_data)} 根物料！")
+                    if p_head_data and p_head_data.get("coords"):
+                        # logger.info(f"第 {layer_idx} 层端头发现 {len(p_head_data)} 根物料！")
+                        base_coord = p_head_data.get("coords")[0]
+                        logger.info(f"第 {layer_idx} 层端头锁定目标物料坐标: {base_coord}")
 
-                        # 将相机相对坐标转换为法兰基座标系绝对坐标
-                        for raw_coord in p_head_data:
-                            # align_camera=True 表示让相机镜头对准端头，而不是夹爪
-                            base_coord = self.transform_tool_coord(raw_coord, align_camera=1)
-                            if base_coord:
-                                valid_materials_base_coords.append(base_coord)
+                        # # 将相机相对坐标转换为法兰基座标系绝对坐标
+                        # for raw_coord in p_head_data:
+                        #     # align_camera=True 表示让相机镜头对准端头，而不是夹爪
+                        #     base_coord = self.transform_tool_coord(raw_coord, align_camera=1)
+                        #     if base_coord:
+                        #         valid_materials_base_coords.append(base_coord)
 
+                        target_material_base_coord = base_coord
                         found_layer_idx = layer_idx
                         # 保存层数记忆 (因为每次都重新拍整层，所以只记层数即可)
                         self.loading_index.current_head_layer_index = layer_idx
@@ -2047,21 +2272,25 @@ class Controller(QThread):
         logger.info("=========================================")
         logger.info("端头已找到！依据视觉 X 坐标平移生成精拍点")
 
-        # 排序：根据你的抓取策略，决定先抓哪一根。
-        # 假设基座标 X 轴对应物料的横向排列，我们按 X 坐标从小到大排序 (从一侧抓到另一侧)
-        valid_materials_base_coords.sort(key=lambda item: item[0])
-
-        # 始终取排序后的第一根物料进行抓取
-        target_mat_coord = valid_materials_base_coords[0]
-        mat_x, mat_y, mat_z, mat_r = target_mat_coord
+        # # 排序：根据你的抓取策略，决定先抓哪一根。
+        # # 假设基座标 X 轴对应物料的横向排列，我们按 X 坐标从小到大排序 (从一侧抓到另一侧)
+        # valid_materials_base_coords.sort(key=lambda item: item[0])
+        #
+        # # 始终取排序后的第一根物料进行抓取
+        # target_mat_coord = valid_materials_base_coords[0]
+        # mat_x, mat_y, mat_z, mat_r = target_mat_coord
+        mat_x, mat_y, mat_z, mat_r = target_material_base_coord
 
         # 【核心逻辑】：X 直接用视觉结果，Y 加上平移量
         fine_target_x = mat_x
         fine_target_y = mat_y + y_offset_dist  # 例如 + 1020.0
 
+        # 使用 found_layer_idx 获取安全的端头点对象，消除变量未定义警告
+        target_head_pt = head_points[found_layer_idx]
+
         # Z轴高度保持端头拍照点的安全高度，防止平移过程撞机
-        safe_z = head_pt["coords"][2]
-        config_curr = head_pt.get("config", "elbow_up")
+        safe_z = target_head_pt["coords"][2]
+        config_curr = target_head_pt.get("config", "elbow_up")
 
         # 逆解计算 J4 补偿角，保证姿态不变
         j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
@@ -2568,23 +2797,28 @@ class Controller(QThread):
             logger.error(f"动作 {hex(process_addr)} 阶段 1 (安全过渡) 失败，终止流程。")
             return
 
-        # =========================================================
-        # 2. 接着执行阵列搜寻逻辑
-        # =========================================================
-        search_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("search_points", [])
+        # # =========================================================
+        # # 2. 接着执行阵列搜寻逻辑
+        # # =========================================================
+        # search_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("search_points", [])
+        #
+        # if not search_points:
+        #     logger.error(f"未找到动作 {hex(process_addr)} 的阵列搜寻点位配置")
+        #     return
+        #
+        # logger.info(f"---> 阶段 2: 开始阵列搜寻 (共 {len(search_points)} 个候选点位) <---")
+        #
+        # # 执行专用的阵列搜寻运动引擎
+        # success = self.execute_search_motion_sequence(
+        #     process_addr=process_addr,
+        #     search_points=search_points,
+        #     loading=1,
+        #     photo_type=const.photo_type_find_head
+        # )
 
-        if not search_points:
-            logger.error(f"未找到动作 {hex(process_addr)} 的阵列搜寻点位配置")
-            return
-
-        logger.info(f"---> 阶段 2: 开始阵列搜寻 (共 {len(search_points)} 个候选点位) <---")
-
-        # 执行专用的阵列搜寻运动引擎
-        success = self.execute_search_motion_sequence(
+        success = self.execute_two_stage_vision_sequence_option_1(
             process_addr=process_addr,
-            search_points=search_points,
-            loading=1,
-            photo_type=const.photo_type_find_head
+            loading=1
         )
 
         # 3. 结果处理
@@ -2611,25 +2845,41 @@ class Controller(QThread):
         source_addr = last_process_addr
 
         # 3. 读取视觉数据，eg:[p1, p2, p3]
-        vision_points_coords = self.get_vision_data(source_addr, photo_type=const.photo_type_loading)
-        if not vision_points_coords:
-            logger.error(f"未找到地址 {hex(source_addr)} 的视觉数据")
+        vision_head_coords = self.get_vision_data(source_addr, photo_type=const.photo_type_find_head)
+        if not vision_head_coords:
+            logger.error(f"未找到{hex(source_addr)}的端头视觉数据")
+
+        # vision_points_coords = self.get_vision_data(source_addr, photo_type=const.photo_type_loading)
+        vision_loading_coords = self.get_vision_data(source_addr, photo_type=const.photo_type_loading)
+
+        if not vision_loading_coords:
+            logger.error(f"未找到地址 {hex(source_addr)} 的抓料视觉数据")
             return
+
+        head_x, head_y, head_z, head_r = vision_head_coords[0]
+        line_x, line_y, line_z, line_r = vision_loading_coords[1]
 
         # 将视觉坐标转换为标准的点对象格式
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
-        target_points_list = []
-        for idx, coords in enumerate(vision_points_coords):
-            pt = {
-                "name": f"Vision_P{idx + 1}",
-                "coords": coords,
-                "photo": 0,
-                "config": process_start_point["config"]
-            }
-            target_points_list.append(pt)
+        # target_points_list = []
+        # for idx, coords in enumerate(vision_points_coords):
+        #     pt = {
+        #         "name": f"Vision_P{idx + 1}",
+        #         "coords": coords,
+        #         "photo": 0,
+        #         "config": process_start_point["config"]
+        #     }
+        #     target_points_list.append(pt)
+        #
+        # # 目标点
+        # target_point = target_points_list[-1]
 
-        # 目标点
-        target_point = target_points_list[-1]
+        target_point = {
+            "name": f"Vision_Gripper_P0",
+            "coords": [line_x, head_y + const.product_y_offset, line_z, line_r],
+            "photo": 0,
+            "config": process_start_point["config"]
+        }
 
         # 构造wp1，目标正上方的点wp1，x,y,r和目标点相同，z和realtime相同
         wp1 = copy.deepcopy(target_point)

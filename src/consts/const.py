@@ -32,9 +32,10 @@ point_once_address = point_addresses[7]  # 发送单个坐标的地址位
 # 坐标间插值数
 point_interpolated_num = 7
 
-# 相机动作参数
-photo_trigger_take = 1  # 拍照
-photo_trigger_depth = 2  # 深度
+# 相机执行参数
+photo_trigger_depth = 1  # 深度相机
+photo_trigger_ccd = 2  # ccd相机
+photo_trigger_laser = 3  # 点激光传感器
 
 ADDR_FIRST = 0x40000
 
