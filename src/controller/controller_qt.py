@@ -1385,9 +1385,9 @@ class Controller(QThread):
 
         return False
 
-    def execute_standard_motion_sequence_history_1(self, process_addr, points_sequence):
+    def execute_standard_motion_sequence_with_interpolate(self, process_addr, points_sequence):
         """
-        通用的运动控制序列执行函数
+        通用的运动控制序列执行函数，带笛卡尔插值计算
         :param points_sequence: 包含起点的完整点位列表 [Start, P1, P2...]
         """
         points_count = len(points_sequence)
@@ -1476,7 +1476,7 @@ class Controller(QThread):
     def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None,
                                          send_done=True):
         """
-        标准运动序列执行函数
+        标准运动序列执行函数, 没有插值
         :param process_addr:动作地址位
         :param points_sequence: 坐标点位
         :param loading: 上下料标记，1/上料，2/下料
@@ -2857,7 +2857,7 @@ class Controller(QThread):
             return
 
         head_x, head_y, head_z, head_r = vision_head_coords[0]
-        line_x, line_y, line_z, line_r = vision_loading_coords[1]
+        line_x, line_y, line_z, line_r = vision_loading_coords[0]
 
         # 将视觉坐标转换为标准的点对象格式
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
@@ -2891,7 +2891,6 @@ class Controller(QThread):
         # wp2下降到目标点的z, 构造wp3
         h_delta = target_point["coords"][2] - wp1["coords"][2] + 40
         logger.info(f"h_delta is : {h_delta}")
-        # wp3 = self.move_up_down(wp1, h_delta)
 
         wp3 = self.move_up_down(wp2, h_delta)
 
@@ -3552,13 +3551,13 @@ def main():
     control_obj.z0 = control_obj.robot_params.get('z0')
     control_obj.nn3 = control_obj.robot_params.get('nn3')
 
-    plc_cfg = control_obj.cfg_manager.get_plc_config()
-    control_obj.plc = PLCClient(plc_cfg["ip"], plc_cfg["port"])
-
-    logger.info("机器人后台控制服务启动...")
-    if not control_obj.plc.connect():
-        logger.error("PLC 连接失败，线程退出")
-        return  # 连接失败直接退出线程
+    # plc_cfg = control_obj.cfg_manager.get_plc_config()
+    # control_obj.plc = PLCClient(plc_cfg["ip"], plc_cfg["port"])
+    #
+    # logger.info("机器人后台控制服务启动...")
+    # if not control_obj.plc.connect():
+    #     logger.error("PLC 连接失败，线程退出")
+    #     return  # 连接失败直接退出线程
 
 
     target_mat_coord = control_obj.transform_tool_coord(camera_coord, align_camera=1, joint_valid=False)
