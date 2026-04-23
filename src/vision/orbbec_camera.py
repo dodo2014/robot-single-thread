@@ -248,6 +248,29 @@ class OrbbecCameraDevice:
 
         return False, None, None
 
+    def flush_frames(self, num_frames=10):
+        """
+        排空历史缓存帧，获取最新画面，并给自动曝光留出时间
+        :param num_frames: 丢弃的帧数 (建议 3~5 帧)
+        """
+        if not self.pipeline or not self.is_connected:
+            return
+
+        logger.info(f"清理相机底层缓存队列，丢弃前 {num_frames} 帧...")
+        for _ in range(num_frames):
+            try:
+                # 设定极短的超时时间，把积压在内存里的图迅速抽走抛弃
+                frames = self.pipeline.wait_for_frames(10)
+                if frames:
+                    # 显式释放内存
+                    color = frames.get_color_frame()
+                    depth = frames.get_depth_frame()
+                    if color: del color
+                    if depth: del depth
+                    del frames
+            except Exception:
+                pass
+
     def is_alive(self):
         """简单的链路健康检查"""
         try:

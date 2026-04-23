@@ -272,6 +272,10 @@ class DetectAlgoService:
 
     def execute_detection_midian_depth(self, ptype:int, number:int=21):
         """获取深度值的中位数返回值"""
+
+        # 在正式获取图像前，排空旧图
+        self.device.flush_frames(num_frames=5)
+
         results = []
         for idx in range(number):
             if idx < 7:  # 运动到点位之后立即拍照，图像深度不稳定，前7次只触发拍照，不处理

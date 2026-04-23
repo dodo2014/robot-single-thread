@@ -553,6 +553,7 @@ class Controller(QThread):
         coords = point.get("coords", [0, 0, 0, 0])
         elbow_config = point.get("config")
         xe, ye, ze, te = coords[0], coords[1], coords[2], coords[3]
+        logger.info(f"发送坐标:{xe},{ye},{ze},{te}")
         try:
             # 逆解运算
             ik_res = ScaraKinematics.inverse_kinematics_v2(xe, ye, ze, te, self.l1, self.l2, self.z0, self.nn3,
@@ -572,7 +573,8 @@ class Controller(QThread):
                 self.plc.write_float(addr_acc, 0.0)
 
                 logger.info(
-                    f"坐标({xe},{ye}) -> 关节({ik_res['the1']:.2f}, {ik_res['the2']:.2f})")
+                    f"坐标({xe},{ye},{ze},{te}) -> "
+                    f"关节({ik_res['the1']:.2f}, {ik_res['the2']:.2f}),{ik_res['the3']:.2f},{ik_res['th4']:.2f}")
             else:
                 logger.error(f"逆解失败：动作{process_addr}目标点{coords}不可达")
                 success_flag = False
@@ -1321,7 +1323,7 @@ class Controller(QThread):
                 if photo_type == const.photo_type_find_head:
                     # 找端头模式, 使用【相机】对齐目标
                     # 传入 cheat_gripper_offset 标志 (需在 transform_tool_coord 内部实现，让夹爪offset = 相机offset)
-                    trans_coord = self.transform_tool_coord(coord, align_camera=1)
+                    trans_coord = self.transform_tool_coord(coord, align_camera=1, joint_valid=False)
                 else:
                     # 普通模式，使用【夹爪】对齐目标
                     trans_coord = self.transform_tool_coord(coord)
@@ -2207,7 +2209,7 @@ class Controller(QThread):
             if self.check_estop(): return False
 
             head_pt = head_points[layer_idx]
-            logger.info(f"--- [阶段1] 前往第 {layer_idx} 层端头群拍点: {head_pt.get('name')} ---")
+            logger.info(f"---> 前往第 {layer_idx} 层端头群拍点: {head_pt.get('name')} <---")
 
             while self.running:
                 if self.check_estop(): return False
@@ -2222,9 +2224,10 @@ class Controller(QThread):
 
                 if vision_res == "OK":
                     p_head_data = self.get_vision_data(process_addr, photo_type=const.photo_type_find_head)
-                    if p_head_data and p_head_data.get("coords"):
+                    logger.info(f"head_data: {p_head_data}")
+                    if p_head_data and len(p_head_data) > 0:
                         # logger.info(f"第 {layer_idx} 层端头发现 {len(p_head_data)} 根物料！")
-                        base_coord = p_head_data.get("coords")[0]
+                        base_coord = p_head_data[0]
                         logger.info(f"第 {layer_idx} 层端头锁定目标物料坐标: {base_coord}")
 
                         # # 将相机相对坐标转换为法兰基座标系绝对坐标
@@ -2319,6 +2322,7 @@ class Controller(QThread):
             if self.check_estop(): return False
 
             # 1. 平移到精拍点
+            logger.info(f"移动到精拍点: X={fine_target_x:.1f}, Y={fine_target_y:.1f}, Z={safe_z:.1f}")
             if not self._move_segment_to_target(process_addr, target_point=fine_photo_pt, interpolate=True):
                 return False
 
@@ -2815,7 +2819,7 @@ class Controller(QThread):
         #     loading=1,
         #     photo_type=const.photo_type_find_head
         # )
-
+        logger.info(f"---> 阶段 2: 开始执行二阶段定位，端头定位+精拍定位 <---")
         success = self.execute_two_stage_vision_sequence_option_1(
             process_addr=process_addr,
             loading=1
@@ -2874,9 +2878,18 @@ class Controller(QThread):
         # # 目标点
         # target_point = target_points_list[-1]
 
+        target_x = line_x
+
+        theta = math.radians(line_r)
+        offset_y = const.product_y_offset * math.cos(theta)
+        target_y = head_y + offset_y
+
+        target_z = line_z
+        target_r = line_r
+
         target_point = {
             "name": f"Vision_Gripper_P0",
-            "coords": [line_x, head_y + const.product_y_offset, line_z, line_r],
+            "coords": [target_x, target_y, target_z, target_r],
             "photo": 0,
             "config": process_start_point["config"]
         }
@@ -3531,6 +3544,7 @@ class Controller(QThread):
 
 def main():
     camera_coord = [-192.65, 32.65, 400, 0.0]
+    # camera_coord = [28.08, 30.89, 344, 0.29]
     head_pt = {
         "name": "L1_Head",
         "coords": [
