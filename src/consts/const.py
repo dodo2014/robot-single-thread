@@ -69,8 +69,8 @@ J2_LIMIT_MAX = 162
 J2_LIMIT_MIN = -162
 
 # 机械臂J4活动范围
-J4_LIMIT_MAX = 137
-J4_LIMIT_MIN = -137
+J4_LIMIT_MAX = 145
+J4_LIMIT_MIN = -145
 
 # 设定精拍阈值 (mm)
 PRECISE_PHOTO_DISTANCE = 400.0
@@ -123,14 +123,15 @@ search_index_name="current_search_index"
 head_layer_index_name = "current_head_layer_index"
 
 # 上料区物料参数
-product_height = 117  # 单个产品的高度
+product_height = 117  # 单个产品的高度(mm)
 interval_height = 15  # 层与层之间间隔木条的高度（mm）
-base_depth = 420  # 首层标准深度，最上层拍照位，深度相机与物料的距离,低于这个值，物料上沿的深度会丢失
+base_depth = 420  # 首层标准深度，最上层拍照位，深度相机与物料的距离,低于这个值，物料上沿的深度会丢失, (mm)
 product_cols_per_layer = 5  # 每层的物料数量
 product_total_layers = 2  # 物料的总层数
-tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动
+tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动 (mm)
 product_y_offset = 1020.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
-fine_photo_world_angle = -3.35  # 精拍点位的末端绝对角度
+depth_interference_x_offset = 20 # 上料区域，精拍点位，为了消除精拍之后的深度干扰，在精拍点位X+方向，增加偏移(mm)
+fine_photo_world_angle = -3.35  # 上料区域精拍点位的末端绝对角度 (度°)
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8  # 200

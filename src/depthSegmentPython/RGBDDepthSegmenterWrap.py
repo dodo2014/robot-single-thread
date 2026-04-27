@@ -879,7 +879,49 @@ class RGBDDetector:
             'y_avg': new_y_avg
         }
 
-    def _sample_depth_near_line(self, depth_filtered, line_points, offset=10):
+    def _sample_depth_near_line(self, depth_filtered, line_points, radius=10, percentile=10):
+        """
+        在直线一侧采样深度（根据排序规则确定搜索方向）
+        
+        参数:
+            depth_filtered: 滤波后的深度图
+            line_points: 直线上的像素点列表
+            radius: 邻域搜索半径（像素）
+            
+        返回:
+            产品侧的平均深度，如果采样失败返回None
+        """
+        h, w = depth_filtered.shape
+        
+        depths = []
+        
+        for (x, y) in line_points:
+            x_int, y_int = int(x), int(y)
+            
+            # 根据排序规则确定搜索方向
+            if self.sort_rule == SortRule.SORT_BY_Y_ASC: #升序
+                # 从上到下扫描 → 抓取顶部边缘
+                step = 1
+            else: #降序
+                # 从下到上扫描 → 抓取底部边缘
+                step = -1
+            
+            # 从直线向外搜索第一个有效深度点
+            for offset in range(1, radius + 1):
+                sample_y = y_int + step * offset
+                if 0 <= sample_y < h and 0 <= x_int < w:
+                    curr_depth = depth_filtered[sample_y, x_int]
+                    if (curr_depth != self.depth_invalid and 
+                        self.feed_depth_min <= curr_depth <= self.feed_depth_max):
+                        depths.append(curr_depth)
+                        break
+        
+        if depths:
+            # return int(np.median(depths))
+            return int(min(depths))
+        else:
+            return None
+
         """
         在直线两侧采样深度，取最小值（因为产品侧深度小，背景侧深度大）
         
@@ -940,11 +982,11 @@ class RGBDDetector:
                         side2_depths.append(curr_depth)
         
         # 计算两侧的平均深度
-        # avg_side1 = np.mean(side1_depths) if side1_depths else float('inf')
-        # avg_side2 = np.mean(side2_depths) if side2_depths else float('inf')
+        avg_side1 = np.mean(side1_depths) if side1_depths else float('inf')
+        avg_side2 = np.mean(side2_depths) if side2_depths else float('inf')
 
-        # print(f"  侧1平均深度: {avg_side1 if avg_side1 != float('inf') else 'None'}")
-        # print(f"  侧2平均深度: {avg_side2 if avg_side2 != float('inf') else 'None'}")
+        print(f"  侧1平均深度: {avg_side1 if avg_side1 != float('inf') else 'None'}")
+        print(f"  侧2平均深度: {avg_side2 if avg_side2 != float('inf') else 'None'}")
 
         # 中值
         # sorted_side1_depths = np.sort(side1_depths)
@@ -2083,16 +2125,7 @@ class RGBDDetector:
         if distance < min_length:
             print(f'skip line for distance = {distance}')
             return None
-        
-        # 计算几何中点
-        if is_horizontal:
-            mid_x = roi_x_start + (roi_x_end - roi_x_start) // 2
-            mid_y = (y1 + y2) // 2
-        else:
-            mid_x = (x1 + x2) // 2
-            mid_y = roi_y_start + (roi_y_end - roi_y_start) // 2
-        
-        edge_center_point = (mid_x, mid_y)
+
         
         # 提取直线上的像素点
         target_pixels = []
@@ -2106,14 +2139,14 @@ class RGBDDetector:
         count_thresh = 10
         if len(target_pixels) <= count_thresh:
             return None
-        
-        # 计算像素中心
+             
+        # 计算像素中心，用于叠加显示
         cx = int(np.mean([p[0] for p in target_pixels]))
         cy = int(np.mean([p[1] for p in target_pixels]))
         pixel_center = (cx, cy)
-        
-        # 采样深度
-        avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset=15)
+
+        # 采样直线两侧邻域计算深度
+        avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, radius=5)
         
         if avg_depth is None:
             print(f'skip line for avg_depth is None')
@@ -2134,7 +2167,17 @@ class RGBDDetector:
             rotate_angle -= 90
         if rotate_angle > 45:
             rotate_angle -= 90
+                
+        # 计算几何中点
+        if is_horizontal:
+            mid_x = roi_x_start + (roi_x_end - roi_x_start) // 2
+            mid_y = (y1 + y2) // 2
+        else:
+            mid_x = (x1 + x2) // 2
+            mid_y = roi_y_start + (roi_y_end - roi_y_start) // 2
         
+        edge_center_point = (mid_x, mid_y)
+
         # 世界坐标
         world_xyz = self._pixel2world(edge_center_point, avg_depth)
         
@@ -2198,7 +2241,8 @@ class RGBDDetector:
         """
  
         # 深度图预处理
-        depth_filtered = self._preprocess_depth(depth_img)
+        # depth_filtered = self._preprocess_depth(depth_img)
+        depth_filtered = depth_img
         
         # 提取ROI区域
         roi_depth, roi_x_start, roi_x_end, roi_y_start, roi_y_end = self._extract_roi(
@@ -2241,8 +2285,11 @@ class RGBDDetector:
             is_horizontal=True,
             angle_threshold=15
         )
-        
-        # 合并线段
+
+        #合并线段
+        horizontal_lines = self._merge_lines_general(horizontal_lines)
+
+        # 显示合并线段
         if debug == 1:
             line_bgr = cv2.cvtColor(depth_normalized, cv2.COLOR_GRAY2BGR)
             color = (random.randint(40,255), random.randint(40,255), random.randint(40,255))
@@ -3392,9 +3439,9 @@ class RGBDDetector:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 
                 # 显示层信息
-                layer = region.get("layer", 0)
-                cv2.putText(draw_img, f"L{layer+1}", (mid_x-15, mid_y+15), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                # layer = region.get("layer", 0)
+                # cv2.putText(draw_img, f"L{layer+1}", (mid_x-15, mid_y+15), 
+                #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
                 
                 # 显示匹配分数（如果是模板匹配）
                 if "match_score" in region:

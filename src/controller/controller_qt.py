@@ -2193,6 +2193,7 @@ class Controller(QThread):
 
         # 1. 获取平移参数
         y_offset_dist = const.product_y_offset
+        x_offset_dist = const.depth_interference_x_offset
 
         # 2. 读取记忆的层数 (假设你已经有了 current_layer_index 属性)
         start_layer = getattr(self.loading_index, 'current_head_layer_index', 0)
@@ -2284,9 +2285,10 @@ class Controller(QThread):
         # mat_x, mat_y, mat_z, mat_r = target_mat_coord
         mat_x, mat_y, mat_z, mat_r = target_material_base_coord
 
-        # 【核心逻辑】：X 直接用视觉结果，Y 加上平移量
-        fine_target_x = mat_x
-        fine_target_y = mat_y + y_offset_dist  # 例如 + 1020.0
+        # X加上平移量，消除视觉中的边缘深度干扰
+        # Y 加上平移量
+        fine_target_x = mat_x + const.depth_interference_x_offset
+        fine_target_y = mat_y + const.product_y_offset  # 例如 + 1020.0
 
         # 使用 found_layer_idx 获取安全的端头点对象，消除变量未定义警告
         target_head_pt = head_points[found_layer_idx]
@@ -2877,11 +2879,21 @@ class Controller(QThread):
         #
         # # 目标点
         # target_point = target_points_list[-1]
+        logger.info(f"vision head : {vision_head_coords[0]}")
+        logger.info(f"vision loading : {vision_loading_coords[0]}")
 
         target_x = line_x
 
-        theta = math.radians(line_r)
-        offset_y = const.product_y_offset * math.cos(theta)
+        world_angle = ScaraKinematics().calculate_world_angle_from_j4(
+            line_x, line_y, line_z, line_r, self.l1, self.l2, self.z0, self.nn3, config_type="elbow_up")
+        logger.info(f"world angle : {world_angle}")
+        world_rad = math.radians(world_angle)
+        offset_y = const.product_y_offset * math.cos(world_rad)
+        logger.info(f"4008D offset_y : {offset_y}")
+
+        # theta = math.radians(line_r)
+        # offset_y = const.product_y_offset * math.cos(theta)
+        # logger.info(f"4008D offset y: {offset_y}")
         target_y = head_y + offset_y
 
         target_z = line_z
@@ -2894,6 +2906,8 @@ class Controller(QThread):
             "config": process_start_point["config"]
         }
 
+        logger.info(f"gripper target point is: {target_point}")
+
         # 构造wp1，目标正上方的点wp1，x,y,r和目标点相同，z和realtime相同
         wp1 = copy.deepcopy(target_point)
         wp1["coords"][2] = process_start_point["coords"][2]
@@ -2904,6 +2918,8 @@ class Controller(QThread):
         # wp2下降到目标点的z, 构造wp3
         h_delta = target_point["coords"][2] - wp1["coords"][2] + 40
         logger.info(f"h_delta is : {h_delta}")
+
+        wp1_1 = self.move_up_down(wp1, -350)
 
         wp3 = self.move_up_down(wp2, h_delta)
 
@@ -2918,7 +2934,7 @@ class Controller(QThread):
         way_point_down = self.move_up_down(way_point_forward, -100)
 
         # points = [process_start_point, way_point_up, way_point_forward, way_point_down]
-        points = [process_start_point, wp1]
+        points = [process_start_point, wp1, wp1_1]
 
         """
         # 1、从实时点移动到目标点后面50mm处

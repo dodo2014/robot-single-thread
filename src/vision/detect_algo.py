@@ -45,6 +45,9 @@ class DetectAlgoService:
         self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
         self.save_thread.start()
 
+        self.alive_thread = threading.Thread(target=self._keep_alive_worker, daemon=True)
+        self.alive_thread.start()
+
         # 初始化相机并预热
         logger.info("Initializing camera hardware...")
         try:
@@ -68,6 +71,19 @@ class DetectAlgoService:
             logger.info("Camera is ready.")
         except Exception as e:
             logger.warning(f"Camera warm-up interrupted: {e}")
+
+    def _keep_alive_worker(self):
+        while not self.stop_event.is_set():
+            try:
+                ret, color, depth = self.device.get_frames()
+                if ret:
+                    del color
+                    del depth
+            except Exception as e:
+                pass
+
+            time.sleep(15)
+
 
     def _save_worker(self):
         """后台存图线程函数"""
@@ -154,6 +170,8 @@ class DetectAlgoService:
                 # 只有当连续多次（例如超过3次）都拿不到图时，才真正去重启相机
                 if attempt >= 3:
                     logger.warning("Multiple consecutive frame drops, re-initializing pipeline...")
+                    self.device.disconnect()
+                    time.sleep(0.5)
                     self.device.connect()
                 # # 采集失败通常意味着链路抖动，尝试重新初始化 pipeline
                 # self.device.connect()
@@ -341,6 +359,7 @@ class DetectAlgoService:
         self.stop_event.set()
         self.save_queue.put(None)  # 发送退出信号
         self.save_thread.join(timeout=3.0)
+        self.alive_thread.join(timeout=3.0)
         self.device.disconnect()
 
     def update_product(self, new_product_no):

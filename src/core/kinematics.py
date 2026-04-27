@@ -478,6 +478,7 @@ class ScaraKinematics:
         j1 = ik_res['the1']
         j2 = ik_res['the2']
         j4_relative = ik_res['th4']  # 即传入的 te
+        config = ik_res['config']
 
         # 2. 计算世界绝对角度
         # World_R = J1 + J2 + J4_relative
@@ -487,7 +488,7 @@ class ScaraKinematics:
         while world_r > 180: world_r -= 360
         while world_r <= -180: world_r += 360
 
-        return [xe, ye, ze, world_r]
+        return world_r
 
     def calculate_forward_move(self, l1, l2, z0, nn3, xe, ye, ze, te, distance, config_curr='elbow_up'):
         """
@@ -692,10 +693,10 @@ if __name__ == "__main__":
     point = {
                     "name": "Teach_P1",
                     "coords": [
-                        -218.08,
-                        1242.66,
-                        -15.98,
-                        -126.72
+                        -33.46,
+                        226.43,
+                        86.18,
+                        -120.97
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -715,12 +716,12 @@ if __name__ == "__main__":
     res = ScaraKinematics().inverse_kinematics_v2(xe, ye, ze, te, l1, l2, z0, nn3, config_type=config_curr)
     print(res)
 
-    res_world_angle = ScaraKinematics().calculate_world_angle_from_j4(
-        xe, ye, ze, te,
-        l1, l2, z0, nn3,
-        config_type=config_curr
-    )
-    print(res_world_angle)
+    # res_world_angle = ScaraKinematics().calculate_world_angle_from_j4(
+    #     xe, ye, ze, te,
+    #     l1, l2, z0, nn3,
+    #     config_type=config_curr
+    # )
+    # print(res_world_angle)
 
 
     # motor_r = ScaraKinematics().calculate_motor_r_from_world_angle(xe, ye, ze, world_r, l1, l2, z0, nn3, config_curr)

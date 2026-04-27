@@ -27,10 +27,10 @@
 	"tool_coord_r": 0,              // 工具旋转角度偏移（度）
 	
 	// ==================== 产品尺寸参数 ====================
-	"product_height": 40,          // 单个产品的高度（mm），用于分层检测; 40不是真实高度，是产品上边缘到折弯的高度
-	"product_width": 40,           // 单个产品的宽度（mm），用于过滤直线；40不是真实宽度，是产品上边缘的宽度
+	"product_height": 40,          // 单个产品的高度（mm），用于分层检测; 40不是真实高度，是产品L型上边沿到折弯的高度
+	"product_width": 40,           // 单个产品的宽度（mm），用于过滤直线；40不是真实宽度，是产品L型上边沿的宽度
 	"interval_height": 92,          // 层与层之间间隔木条的高度（mm），层高需要对product_height进行补偿，product_height+interval_height=真实层高
-	"product_start_height": 400,    // 顶层产品初始高度（mm）
+	"product_start_height": 420,    // 顶层产品初始高度（mm）
 	"tray_start_height": 1000,      // 托盘初始高度（mm），底层产品的基准深度
 	"product_count_per_layer": 2,  // 上料每层产品数量
 	
@@ -62,8 +62,8 @@
 	// "feed_roi_h": 616,              // 上料ROI高度（像素）
 
 	// ==================== 上料算法参数 ====================
-	"feed_depth_min": 200,          // 上料区域有效深度最小值（mm），过滤近距离噪声
-	"feed_depth_max": 1500,         // 上料区域有效深度最大值（mm），过滤远距离背景
+	"feed_depth_min": 440,          // 上料区域有效深度最小值（mm），过滤近距离噪声
+	"feed_depth_max": 490,         // 上料区域有效深度最大值（mm），过滤远距离背景
 	"feed_depth_thresh": 7,		// 深度跳变阈值
 	"feed_min_length": 200,         // 产品最小宽度（像素），用于过滤过短的直线
 	"feed_edge_index": 0,			// 抓取上料产品边缘的序号（0表示第一个，1表示第二个）
