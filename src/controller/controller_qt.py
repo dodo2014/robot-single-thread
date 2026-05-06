@@ -21,6 +21,9 @@ import math
 
 class Controller(QThread):
     log_signal = pyqtSignal(str)
+    sig_wood_stick_alarm = pyqtSignal(int)  # 触发垫木报警弹窗 (传递层数)
+    sig_wood_stick_clear = pyqtSignal()  # 关闭垫木报警弹窗
+
 
     def __init__(self):
         super().__init__()
@@ -71,7 +74,6 @@ class Controller(QThread):
         logger.info(cfg)
 
     def run(self):
-        logger.info("机器人后台控制服务启动...")
         # self.plc.connect()
         # 1. 在线程内部进行重量级初始化
         # 这样即使 PLC 连接超时，也不会卡住主界面
@@ -215,8 +217,6 @@ class Controller(QThread):
 
     def loop_once(self):
         realtime_point = self.get_realtime_point(loop=1)
-        if self.loop_count % 50 == 0:
-            logger.info(f"current point: {realtime_point}")
 
         # =======================================
         # 视觉测试
@@ -235,7 +235,9 @@ class Controller(QThread):
         """执行一次完整的轮询和处理"""
         # 获取急停地址位的数据
         e_stop_regs = self.plc.read_holding_registers(self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR), 1)
-        if self.loop_count % 50 == 0:
+
+        if self.loop_count % const.loop_log_rate == 0:
+            logger.info(f"current point: {realtime_point}")
             logger.info(
                 f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
 
@@ -246,7 +248,7 @@ class Controller(QThread):
             self.last_motion_end_point = None
             # 2. 不读取业务寄存器，直接返回
             # 3. 打印日志提示（为了防止刷屏，可以加个状态位控制打印频率）
-            if self.loop_count % 50 == 0: logger.info("系统急停中，等待复位...")
+            if self.loop_count % const.loop_log_rate == 0: logger.info("系统急停中，等待复位...")
             time.sleep(0.5)  # 降低轮询频率
             return
 
@@ -264,13 +266,14 @@ class Controller(QThread):
             const.process_num
         )
 
-        # 防止日志刷屏
-        if self.loop_count % 50 == 0: logger.info(f"loop states: {states}")
         addr_value_map = {
             start_addr + idx: val
             for idx, val in enumerate(states)
         }
-        if self.loop_count % 50 == 0: logger.info(f"loop states (地址:值): {addr_value_map}")
+        # 防止日志刷屏
+        if self.loop_count % const.loop_log_rate == 0:
+            # logger.info(f"loop states: {states}")
+            logger.info(f"loop states (地址:值): {addr_value_map}")
 
         if not states:
             return
@@ -362,7 +365,7 @@ class Controller(QThread):
             )
 
             if loop == 1:
-                if self.loop_count % 50 == 0:
+                if self.loop_count % const.loop_log_rate == 0:
                     # logger.info("res: {}".format(regs))
                     logger.info(
                         f"PLC反馈关节信息: [{curr_j1:.2f}, {curr_j2:.2f}, {curr_j3:.2f}, {curr_j4:.2f}]")
@@ -1505,6 +1508,7 @@ class Controller(QThread):
             for i in range(points_count - 1):
                 start_point = points_sequence[i]
                 end_point = points_sequence[i + 1]
+                logger.info(f"target point : {end_point}")
 
                 # 获取 photo 标志 (0 或 1)
                 photo_trigger = end_point.get("photo", 0)
@@ -1548,19 +1552,23 @@ class Controller(QThread):
                         logger.info(f"发送 UDP (CCD): {msg}")
                         has_ccd_triggered = True
 
+                        time.sleep(1)
                         # 阻塞等待 OK，超时时间设为 60 秒 (根据实际算法耗时调整)
                         # 调用封装的等待方法，把 controller 的急停检测方法当做参数传进去
-                        if udp_client.wait_for_response(
-                                expected_msg="OK",
-                                timeout_sec=60.0,
-                                check_estop_func=self.check_estop,  # 注入急停检测回调
-                                is_running_func=lambda: self.running  # 注入线程状态回调
-                        ):
-                            logger.info(f"[{pos_name}] 收到 CCD 响应: OK")
-                            vision_ok = True
-                        else:
-                            logger.error(f"[{pos_name}] CCD 响应失败或超时")
-                            vision_ok = False
+                        # if udp_client.wait_for_response(
+                        #         expected_msg="OK",
+                        #         timeout_sec=60.0,
+                        #         check_estop_func=self.check_estop,  # 注入急停检测回调
+                        #         is_running_func=lambda: self.running  # 注入线程状态回调
+                        # ):
+                        #     logger.info(f"[{pos_name}] 收到 CCD 响应: OK")
+                        #     vision_ok = True
+                        # else:
+                        #     logger.error(f"[{pos_name}] CCD 响应失败或超时")
+                        #     vision_ok = False
+
+                        # if i+1 == len(points_sequence) -1 :
+                        #     udp_client.send_msg(f"finish")
 
                     elif photo_trigger == const.photo_trigger_laser:
                         # 激光测距触发逻辑
@@ -1574,17 +1582,18 @@ class Controller(QThread):
                         logger.info(f"发送 UDP (Laser): {msg}")
                         has_laser_triggered = True
 
-                        if udp_client.wait_for_response(
-                                expected_msg="OK",
-                                timeout_sec=30.0,
-                                check_estop_func=self.check_estop,
-                                is_running_func=lambda: self.running
-                        ):
-                            logger.info(f"[{pos_name}] 收到 Laser 响应: OK")
-                            vision_ok = True
-                        else:
-                            logger.error(f"[{pos_name}] Laser 响应失败或超时")
-                            vision_ok = False
+                        time.sleep(1)
+                        # if udp_client.wait_for_response(
+                        #         expected_msg="OK",
+                        #         timeout_sec=30.0,
+                        #         check_estop_func=self.check_estop,
+                        #         is_running_func=lambda: self.running
+                        # ):
+                        #     logger.info(f"[{pos_name}] 收到 Laser 响应: OK")
+                        #     vision_ok = True
+                        # else:
+                        #     logger.error(f"[{pos_name}] Laser 响应失败或超时")
+                        #     vision_ok = False
 
                     # 3. 结果分支 (NG 处理)
                     if vision_ok:
@@ -1660,6 +1669,39 @@ class Controller(QThread):
             return False
 
         return False
+
+
+    # 处理取垫木挂起逻辑的辅助函数
+    def _handle_wood_stick_removal(self, process_addr, layer_idx):
+        """
+        处理跨层取垫木逻辑：
+        发送报警 -> 触发 UI -> 阻塞死等复位 -> 恢复
+        """
+        logger.warning(f"检测到跨层 (目标层：{layer_idx})，挂起等待人工移除垫木！")
+
+        # 1. 触发 UI 非阻塞弹窗
+        self.sig_wood_stick_alarm.emit(layer_idx)
+
+        # 2. 通知 PLC 全局状态 (写入 15 亮起报警灯)
+        self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK, const.product_loading_rack_wood_stick)
+
+        # 3. 阻塞等待人工复位 (按照约定，等待 PLC 在当前动作地址发送 20)
+        logger.info("系统挂起：等待工人取走垫木，并按下机台复位按钮(20)...")
+
+        # 使用 timeout=-1 无限死等，期间 check_estop 依然有效
+        if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+            logger.info("收到垫木移除复位信号(20)，恢复自动运行！")
+
+            # 通知 UI 关闭弹窗
+            self.sig_wood_stick_clear.emit()
+
+            # (可选) 恢复全局料架状态为正常，比如写回 0
+            # self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK, 0)
+
+            return True
+
+        return False  # 触发急停或程序退出
+
 
     def scan_rack_depth_mapping(self, process_addr, search_points, config, loading, photo_type):
         """
@@ -2206,6 +2248,7 @@ class Controller(QThread):
         valid_materials_base_coords = []
         target_material_base_coord = None  # 直接存放唯一的目标基座标
 
+        # === 外层循环：逐层寻找端头 ===
         for layer_idx in range(start_layer, len(head_points)):
             if self.check_estop(): return False
 
@@ -2248,7 +2291,26 @@ class Controller(QThread):
                         logger.error("视觉返回OK，但无法获取端头坐标数据")
 
                 elif vision_res == "EMPTY":
-                    logger.info(f"第 {layer_idx} 层端头无料，准备下探...")
+
+                    # 检查这一层是否是刚刚被我们抓空的
+                    # if layer_idx == getattr(self, 'last_picked_layer', -1):
+                    if layer_idx == self.loading_index.last_picked_layer:
+                        logger.info(f"第 {layer_idx} 层刚刚被抓空，露出垫木！")
+
+                        # 挂起死等人工取垫木
+                        if not self._handle_wood_stick_removal(process_addr, layer_idx):
+                            return False  # 急停打断
+
+                        # 人工取走垫木，按复位恢复后，清除标志位，避免重复报警
+                        # self.last_picked_layer = -1
+                        self.loading_index.last_picked_layer = -1
+                        self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+
+                        logger.info(f"第 {layer_idx} 层垫木已移除，准备下探到新楼层...")
+                    else:
+                        # 只是路过空层 (比如刚开机前两层就是空的)
+                        logger.info(f"第 {layer_idx} 层视野无料 (跳过空层)，准备下探...")
+
                     break  # 跳出 while，执行外层 for 的下一层
 
                 else:  # "ERROR"
@@ -2267,6 +2329,10 @@ class Controller(QThread):
             # 7 层全空，执行报警与复位逻辑
             self.loading_index.current_head_layer_index = 0
             self.loading_index.reset_search_index(const.head_layer_index_name)
+
+            # 料架全空换新车时，重置抓取记录
+            self.loading_index.last_picked_layer = -1
+            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
 
             return self._handle_empty_rack_and_wait(process_addr)
 
@@ -2325,7 +2391,7 @@ class Controller(QThread):
 
             # 1. 平移到精拍点
             logger.info(f"移动到精拍点: X={fine_target_x:.1f}, Y={fine_target_y:.1f}, Z={safe_z:.1f}")
-            if not self._move_segment_to_target(process_addr, target_point=fine_photo_pt, interpolate=True):
+            if not self._move_segment_to_target(process_addr, target_point=fine_photo_pt):
                 return False
 
             # 2. 在精拍点触发真实的单根物料抓取识别 (算出夹爪的真实抓取坐标)
@@ -2335,6 +2401,11 @@ class Controller(QThread):
             if final_vision_res == "OK":
                 logger.info("精确定位成功！最终抓取坐标已保存。")
                 self.last_motion_end_point = fine_photo_pt
+
+                # 记录本次成功抓取的层数！
+                self.loading_index.last_picked_layer = found_layer_idx
+                self.loading_index.reset_search_index(const.last_picked_layer_name, found_layer_idx)
+
                 self.plc.write_register(process_addr, 13)
                 return True
 
@@ -2862,8 +2933,8 @@ class Controller(QThread):
             logger.error(f"未找到地址 {hex(source_addr)} 的抓料视觉数据")
             return
 
-        head_x, head_y, head_z, head_r = vision_head_coords[0]
-        line_x, line_y, line_z, line_r = vision_loading_coords[0]
+        head_x, head_y, head_z, head_r = vision_head_coords[0]    # 料头坐标
+        line_x, line_y, line_z, line_r = vision_loading_coords[0]  # 拍摄的抓取坐标
 
         # 将视觉坐标转换为标准的点对象格式
         # 构建路径: Start(P0) -> P1 -> P2 -> P3
@@ -2882,8 +2953,7 @@ class Controller(QThread):
         logger.info(f"vision head : {vision_head_coords[0]}")
         logger.info(f"vision loading : {vision_loading_coords[0]}")
 
-        target_x = line_x
-
+        # 计算r角偏差之后的真实Y偏差
         world_angle = ScaraKinematics().calculate_world_angle_from_j4(
             line_x, line_y, line_z, line_r, self.l1, self.l2, self.z0, self.nn3, config_type="elbow_up")
         logger.info(f"world angle : {world_angle}")
@@ -2891,10 +2961,28 @@ class Controller(QThread):
         offset_y = const.product_y_offset * math.cos(world_rad)
         logger.info(f"4008D offset_y : {offset_y}")
 
-        # theta = math.radians(line_r)
-        # offset_y = const.product_y_offset * math.cos(theta)
-        # logger.info(f"4008D offset y: {offset_y}")
-        target_y = head_y + offset_y
+        # =======================================================
+        # 计算空间位置比例 (Ratio)
+        # 纯粹依靠物理位置计算，与视觉漂移彻底解耦
+        # =======================================================
+        x_ratio = (line_x - const.loading_x_back) / (const.loading_x_front - const.loading_x_back)
+        x_ratio = max(0.0, min(x_ratio, 1.0))  # 限制在 0~1 之间
+
+        # =======================================================
+        # Y 轴补偿计算 (解决偏航问题)
+        # =======================================================
+        # y_comp = const.loading_y_error_front * x_ratio
+        y_comp = const.loading_y_error_back + (const.loading_y_error_front - const.loading_y_error_back) * x_ratio
+
+        # 最终的 Y 坐标 = 视觉真实端头 Y + 1020平移 + 动态补偿
+        target_y = head_y + offset_y + y_comp
+
+        # =======================================================
+        # X 轴补偿计算 (解决相机侧偏引起的透视+下垂误差)
+        # =======================================================
+        x_comp = const.loading_x_error_back + (const.loading_x_error_front - const.loading_x_error_back) * x_ratio
+        target_x = line_x + x_comp
+
 
         target_z = line_z
         target_r = line_r
@@ -2913,7 +3001,7 @@ class Controller(QThread):
         wp1["coords"][2] = process_start_point["coords"][2]
 
         # wp1向前移动35，构造wp2
-        wp2 = self.move_forward(wp1, 35)
+        wp2 = self.move_forward(wp1, 25)
 
         # wp2下降到目标点的z, 构造wp3
         h_delta = target_point["coords"][2] - wp1["coords"][2] + 40
@@ -2934,7 +3022,7 @@ class Controller(QThread):
         way_point_down = self.move_up_down(way_point_forward, -100)
 
         # points = [process_start_point, way_point_up, way_point_forward, way_point_down]
-        points = [process_start_point, wp1, wp1_1]
+        points = [process_start_point, wp1, wp2, wp3]
 
         """
         # 1、从实时点移动到目标点后面50mm处
@@ -3070,6 +3158,15 @@ class Controller(QThread):
 
         # 执行运动控制
         self.execute_standard_motion_sequence(process_addr, points, photo_type=const.photo_type_normal)
+
+        # udp_client = UdpClient(
+        #     local_port=const.inspection_udp_local_port,
+        #     remote_ip=const.inspection_udp_ip,
+        #     remote_port=const.inspection_udp_port
+        # )
+        # udp_client.send_msg("laser_0100_-309.77_537.21_-182.88")
+        # udp_client.send_msg("laser_0101_-311.31_599.91_-182.88")
+        # udp_client.send_msg("laser_finished")
 
         # ============================================
         # 动作全部成功完成后，更新全局记录

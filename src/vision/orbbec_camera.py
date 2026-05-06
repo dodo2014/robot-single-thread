@@ -1,3 +1,4 @@
+import sys
 import traceback
 from pyorbbecsdk import (Pipeline, Config, Context, OBError,
                          OBFormat, OBStreamType, OBAlignMode, OBSensorType)
@@ -93,6 +94,22 @@ class OrbbecCameraDevice:
             # gemini 336l 不支持720p下的硬件对齐(OBAlignMode.HW_MODE), 如果运行报错，可以注释掉软件对齐
             # logger.info("Setting alignment mode to SW_MODE...")
             self.config.set_align_mode(OBAlignMode.SW_MODE)
+
+            # 在设置深度流之后，添加验证
+            logger.info("=== Stream Configuration Summary ===")
+            # logger.info(f"Color settings: {self.color_width}x{self.color_height} @{self.fps}fps")
+            # logger.info(f"Depth settings: {self.depth_width}x{self.depth_height} @{self.fps}fps")
+
+            # 尝试获取实际生效的配置
+            try:
+                # 检查config对象中实际配置的流
+                logger.info(
+                    f"Config align mode: {self.config.get_align_mode() if hasattr(self.config, 'get_align_mode') else 'unknown'}")
+            except:
+                logger.warning("Could not verify align mode")
+
+            logger.info("=== Configuration Complete ===")
+
 
             # 标记配置成功
             # self.is_stream_configured = True
@@ -197,6 +214,10 @@ class OrbbecCameraDevice:
             try:
                 self.pipeline.start(self.config)
                 self.is_connected = True
+
+                if hasattr(self.config, 'get_align_mode'):
+                    logger.info(f">>> Current align mode: {self.config.get_align_mode()}")
+
                 return True, "Success"
             except OBError as e:
                 # 如果启动失败（例如被占用），清理资源以便下次重试
@@ -241,10 +262,29 @@ class OrbbecCameraDevice:
             color_frame = frames.get_color_frame()
             depth_frame = frames.get_depth_frame()
 
-            if color_frame and depth_frame:
-                return True, color_frame, depth_frame
+            # if color_frame and depth_frame:
+            #     return True, color_frame, depth_frame
+
+            if color_frame is not None and depth_frame is not None:
+                # 安全地验证帧数据
+                try:
+                    # 尝试获取数据以确保帧是有效的
+                    color_data = color_frame.get_data()
+                    depth_data = depth_frame.get_data()
+
+                    if color_data is not None and depth_data is not None:
+                        return True, color_frame, depth_frame
+                    else:
+                        logger.warning("Frame data is None")
+                        return False, None, None
+                except Exception as e:
+                    logger.error(f"Error validating frame data: {e}")
+                    return False, None, None
+
         except OBError as e:
             logger.error(f"Wait for frames error: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error getting frames: {e}")
 
         return False, None, None
 
@@ -281,3 +321,155 @@ class OrbbecCameraDevice:
             pass
         return False
 
+    def diagnose_alignment_issue(self):
+        """
+        诊断对齐问题的工具函数 - 安全版本
+        """
+        if not self.pipeline or not self.is_connected:
+            logger.error("Pipeline not started or not connected")
+            return
+
+        try:
+            logger.info("=== Starting Camera Diagnosis ===")
+
+            # 1. 获取设备信息
+            try:
+                device = self.pipeline.get_device()
+                device_info = device.get_device_info()
+                logger.info(f"Device Info: {device_info}")
+            except Exception as e:
+                logger.error(f"Failed to get device info: {e}")
+
+            # 2. 获取帧数据
+            logger.info("Attempting to get frames...")
+            frames = self.pipeline.wait_for_frames(3000)
+
+            if not frames:
+                logger.error("No frames received!")
+                return
+
+            logger.info("Frames object obtained successfully")
+
+            # 3. 安全地获取彩色帧信息
+            logger.info("--- Checking Color Frame ---")
+            color_frame = None
+            try:
+                color_frame = frames.get_color_frame()
+                if color_frame is None:
+                    logger.error("Color frame is None!")
+                else:
+                    # 安全地获取各种属性
+                    try:
+                        width = color_frame.get_width()
+                        height = color_frame.get_height()
+                        logger.info(f"Color frame size: {width}x{height}")
+                    except Exception as e:
+                        logger.error(f"Could not get color frame dimensions: {e}")
+
+                    try:
+                        fmt = color_frame.get_format()
+                        logger.info(f"Color frame format: {fmt}")
+                    except Exception as e:
+                        logger.error(f"Could not get color format: {e}")
+
+                    logger.info("Color frame obtained successfully")
+
+            except Exception as e:
+                logger.error(f"Error getting color frame: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+
+            # 4. 安全地获取深度帧信息
+            logger.info("--- Checking Depth Frame ---")
+            depth_frame = None
+            try:
+                depth_frame = frames.get_depth_frame()
+
+                # 不要直接打印depth_frame对象，而是检查它的存在
+                if depth_frame is None:
+                    logger.error("Depth frame is None!")
+                else:
+                    logger.info("Depth frame object exists")
+
+                    # 安全地获取深度帧的属性
+                    try:
+                        width = depth_frame.get_width()
+                        height = depth_frame.get_height()
+                        logger.info(f"Depth frame size: {width}x{height}")
+                    except Exception as e:
+                        logger.error(f"Could not get depth frame dimensions: {e}")
+
+                    try:
+                        fmt = depth_frame.get_format()
+                        logger.info(f"Depth frame format: {fmt}")
+                    except Exception as e:
+                        logger.error(f"Could not get depth format: {e}")
+
+                    # 检查深度数据
+                    try:
+                        data = depth_frame.get_data()
+                        if data is not None:
+                            logger.info(f"Depth data size: {len(data)} bytes")
+                        else:
+                            logger.warning("Depth data is None")
+                    except Exception as e:
+                        logger.error(f"Could not get depth data: {e}")
+
+                    logger.info("Depth frame obtained successfully")
+
+            except Exception as e:
+                logger.error(f"Error getting depth frame: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+
+            # 5. 对齐检查
+            logger.info("--- Alignment Check ---")
+            if color_frame is not None and depth_frame is not None:
+                try:
+                    color_w = color_frame.get_width()
+                    color_h = color_frame.get_height()
+                    depth_w = depth_frame.get_width()
+                    depth_h = depth_frame.get_height()
+
+                    logger.info(f"Color resolution: {color_w}x{color_h}")
+                    logger.info(f"Depth resolution: {depth_w}x{depth_h}")
+
+                    if color_w == depth_w and color_h == depth_h:
+                        logger.warning("Same resolution - check for sensor offset misalignment")
+                        logger.info("Misalignment might be due to physical sensor offset")
+                    else:
+                        logger.info(f"Different resolutions - alignment mapping needed")
+                        logger.info(f"Alignment should handle {depth_w}x{depth_h} -> {color_w}x{color_h}")
+
+                except Exception as e:
+                    logger.error(f"Error comparing frames: {e}")
+            else:
+                logger.error("Cannot compare - one or both frames are None")
+                if color_frame is None:
+                    logger.error("Color frame is missing")
+                if depth_frame is None:
+                    logger.error("Depth frame is missing")
+
+            logger.info("=== Diagnosis Complete ===")
+
+        except Exception as e:
+            logger.error(f"Diagnosis error: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+
+if __name__ == "__main__":
+    camera = OrbbecCameraDevice()
+    status, msg = camera.connect()
+    if status:
+        logger.info(f"Connected: {msg}")
+
+        # 先清空缓存
+        camera.flush_frames(5)
+
+        # 运行诊断
+        for i in range(10):
+            camera.diagnose_alignment_issue()
+            logger.info("\n\n")
+    else:
+        logger.error(f"Failed to connect: {msg}")
+    sys.exit(1)

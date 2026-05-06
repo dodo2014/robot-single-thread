@@ -74,12 +74,14 @@ class DetectAlgoService:
 
     def _keep_alive_worker(self):
         while not self.stop_event.is_set():
+            # logger.info(f"keep camera alive worker...")
             try:
                 ret, color, depth = self.device.get_frames()
                 if ret:
                     del color
                     del depth
             except Exception as e:
+                logger.info(f"keep_alive_worker error: {e} \n {traceback.format_exc()}")
                 pass
 
             time.sleep(15)
@@ -422,7 +424,8 @@ def main():
 
         start_time = round(time.time() * 1000)
         # response = service.execute_detection(ptype=const.photo_type_loading)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         print(response)
 

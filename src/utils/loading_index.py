@@ -13,6 +13,7 @@ class LoadingIndex:
         # 初始化时加载上次的记忆
         self.current_search_index = self.load_search_index(const.search_index_name)
         self.current_head_layer_index = self.load_search_index(const.head_layer_index_name)
+        self.last_picked_layer = self.load_search_index(const.last_picked_layer_name)
 
     def load_search_index(self, key):
         """从文件加载搜寻进度"""
@@ -52,10 +53,10 @@ class LoadingIndex:
         except Exception as e:
             logger.error(f"保存状态文件失败: {e}")
 
-    def reset_search_index(self, key):
+    def reset_search_index(self, key, value=0):
         """复位搜寻进度（换新料车时调用）"""
-        logger.info(">>> 收到复位指令，已将料架搜寻进度归零 <<<")
-        self.save_search_index(key, 0)
+        logger.info(">>> 收到复位指令，已将料架搜寻进度复位 <<<")
+        self.save_search_index(key, value)
 
 if __name__ == "__main__":
     lidx = LoadingIndex()

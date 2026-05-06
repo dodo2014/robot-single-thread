@@ -62,7 +62,7 @@
 	// "feed_roi_h": 616,              // 上料ROI高度（像素）
 
 	// ==================== 上料算法参数 ====================
-	"feed_depth_min": 440,          // 上料区域有效深度最小值（mm），过滤近距离噪声
+	"feed_depth_min": 400,          // 上料区域有效深度最小值（mm），过滤近距离噪声
 	"feed_depth_max": 490,         // 上料区域有效深度最大值（mm），过滤远距离背景
 	"feed_depth_thresh": 7,		// 深度跳变阈值
 	"feed_min_length": 200,         // 产品最小宽度（像素），用于过滤过短的直线
@@ -108,9 +108,9 @@
 	
 	// ==================== 下料算法参数 ====================
 	"unload_layer_count": 6,           // 下料区域总层数
-	"unload_layer_height": 100,        // 每层高度（mm），用于计算不同层的深度
-	"unload_item_count_per_layer": 8,  // 每层可放置的产品数量
-	"unload_item_interval": 10,        // 同层产品之间的间隔（像素）
+	"unload_layer_height": 132,        // 每层高度（mm），用于计算不同层的深度
+	"unload_item_count_per_layer": 5,  // 每层可放置的产品数量
+	"unload_item_interval": 20,        // 同层产品之间的间隔（像素）
 	"unload_item_width": 600,          // 产品在下料区域的宽度（像素）
 	"unload_item_height": 60,          // 产品在下料区域的高度（像素）
 	"unload_depth_threshold": 20       // 深度差异阈值（mm），用于判断该位置是否有物料

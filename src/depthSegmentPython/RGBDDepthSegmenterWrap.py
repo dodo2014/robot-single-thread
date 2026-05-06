@@ -879,7 +879,7 @@ class RGBDDetector:
             'y_avg': new_y_avg
         }
 
-    def _sample_depth_near_line(self, depth_filtered, line_points, radius=10, percentile=10):
+    def _sample_depth_near_line(self, depth_filtered, line_points, offset = 10, radius=10, percentile=10):
         """
         在直线一侧采样深度（根据排序规则确定搜索方向）
         
@@ -907,8 +907,8 @@ class RGBDDetector:
                 step = -1
             
             # 从直线向外搜索第一个有效深度点
-            for offset in range(1, radius + 1):
-                sample_y = y_int + step * offset
+            for y in range(offset, radius + offset):
+                sample_y = y_int + step * y
                 if 0 <= sample_y < h and 0 <= x_int < w:
                     curr_depth = depth_filtered[sample_y, x_int]
                     if (curr_depth != self.depth_invalid and 
@@ -916,11 +916,24 @@ class RGBDDetector:
                         depths.append(curr_depth)
                         break
         
-        if depths:
-            # return int(np.median(depths))
-            return int(min(depths))
-        else:
+        # if depths:
+        #     # return int(np.median(depths))
+        #     return int(min(depths))
+        # else:
+        #     return None
+        if len(depths) == 0:
             return None
+        
+        # 深度从小到大排序
+        depths_sorted = sorted(depths)
+        
+        # 计算百分位数索引
+        idx = int(len(depths_sorted) * percentile / 100)
+        idx = max(0, min(idx, len(depths_sorted) - 1))
+        
+        depth_value = depths_sorted[idx]
+        
+        return int(depth_value)
 
         """
         在直线两侧采样深度，取最小值（因为产品侧深度小，背景侧深度大）
@@ -2146,7 +2159,7 @@ class RGBDDetector:
         pixel_center = (cx, cy)
 
         # 采样直线两侧邻域计算深度
-        avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, radius=5)
+        avg_depth = self._sample_depth_near_line(depth_filtered, target_pixels, offset = 5, radius=5)
         
         if avg_depth is None:
             print(f'skip line for avg_depth is None')
@@ -3586,10 +3599,10 @@ if __name__ == "__main__":
 
     # 获取所有PNG文件
 
-    image_folder = "data/20260409"
+    image_folder = "data/20260428"
     image_files = list(Path(image_folder).glob("*.png"))
 
-    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260409"
+    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260428"
 
     image_files = list(camera_img_folder.glob("*.png"))
     print(image_files)
@@ -3657,6 +3670,7 @@ if __name__ == "__main__":
 
         result_img = detector.draw_result_with_rotated_box(depth_color, detect_res)
         cv2.imshow("result-line", result_img)
+        cv2.imshow("rgb_img", rgb_img)
         # file_name = depth_filename.rsplit('.', 1)[0] + "_result.jpg"
         file_name = os.path.join(output_folder, f"{image_file.stem}_result.jpg")
         # cv2.imwrite(file_name, result_img)

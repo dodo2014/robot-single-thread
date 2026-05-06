@@ -1,3 +1,5 @@
+loop_log_rate = 100
+
 # 动作监控起始位置
 process_start_addr = 0x40082
 process_num = 39
@@ -121,28 +123,41 @@ loading_index_file_name = "loading_index.json"
 search_index_name="current_search_index"
 # 上料区域端头索引的key
 head_layer_index_name = "current_head_layer_index"
+# 上次成功抓取的层
+last_picked_layer_name = "last_picked_layer"
 
 # 上料区物料参数
 product_height = 117  # 单个产品的高度(mm)
+product_width = 123  # 单个产品的宽度(mm)
 interval_height = 15  # 层与层之间间隔木条的高度（mm）
 base_depth = 420  # 首层标准深度，最上层拍照位，深度相机与物料的距离,低于这个值，物料上沿的深度会丢失, (mm)
 product_cols_per_layer = 5  # 每层的物料数量
 product_total_layers = 2  # 物料的总层数
 tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动 (mm)
-product_y_offset = 1020.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
+product_y_offset = 1010.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
 depth_interference_x_offset = 20 # 上料区域，精拍点位，为了消除精拍之后的深度干扰，在精拍点位X+方向，增加偏移(mm)
 fine_photo_world_angle = -3.35  # 上料区域精拍点位的末端绝对角度 (度°)
+
+# Y方向偏差 (1010 漂移到 1030) 补偿
+loading_x_back = -427.0   # 后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
+loading_x_front = -17.0   # 前方料 X值下，Y 偏了 loading_y_error_front 长度值
+loading_y_error_back = 0.0 # 后方Y刚好准(0误差)，前方Y少了20mm(需要+20补偿)
+loading_y_error_front = 20.0 # 前方多出了20mm，需要减去20mm拉回来，取值-20；前方少，需要加回去，+20
+loading_x_error_back = 0.0 # 假设：后方料正好(能包住)，前方料因为下垂/视角放大，需要补偿 +20mm 才能包住
+loading_x_error_front = 20.0
+
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8  # 200
 product_loading_rack_empty = 11  # 空料
+product_loading_rack_wood_stick = 12 # 【新增】等待取垫木
 
-# 上料料加复位信号监听地址
-ADDR_PRODUCT_LOADING_RACK_RESET = 0x400CA  # 202
-product_loading_rack_reset = 10  # 复位信号，plc发出
+# 上料料架复位信号监听地址
+ADDR_PRODUCT_LOADING_RACK_RESET = 0x400C9  # 202
+product_loading_rack_reset = 10  # 空料复位信号，plc发出
 product_loading_rack_reset_ack = 13  # 上位机复位完成，上位机回复plc
 
 # 尺寸检测udp配置
-inspection_udp_ip = '127.0.0.1'
+inspection_udp_ip = '192.168.0.5'
 inspection_udp_port = 8501
 inspection_udp_local_port = 8500

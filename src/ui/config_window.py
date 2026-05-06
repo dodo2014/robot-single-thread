@@ -42,6 +42,14 @@ class GroupInputDialog(QDialog):
 
         layout.addWidget(self.button_box)
 
+        # 【新增】垫木提示框实例
+        self.wood_stick_dialog = None
+
+        # 【新增】连接信号到槽函数
+        self.controller.sig_wood_stick_alarm.connect(self.show_wood_stick_dialog)
+        self.controller.sig_wood_stick_clear.connect(self.close_wood_stick_dialog)
+
+
     def get_data(self):
         """返回用户输入的数据 (display_name, json_key)"""
         return self.name_edit.text().strip(), self.key_edit.text().strip()
@@ -1155,6 +1163,43 @@ class ConfigEditorUI(QMainWindow):
     #         self.table_points.removeRow(current_row)
 
     # === 动态分组管理槽函数 ===
+
+    # =======================================================
+    # 【新增】UI 槽函数
+    # =======================================================
+    def show_wood_stick_dialog(self, layer_idx):
+        """显示非阻塞警告弹窗"""
+        if not self.wood_stick_dialog:
+            self.wood_stick_dialog = QDialog(self)
+            self.wood_stick_dialog.setWindowTitle("⚠️ 人工干预请求")
+            # 窗口置顶，且非模态（不阻塞后面界面的点击，虽然通常这时候也没人点）
+            self.wood_stick_dialog.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.Tool)
+            self.wood_stick_dialog.setModal(False)
+
+            layout = QVBoxLayout()
+            self.lbl_wood_msg = QLabel("")
+            self.lbl_wood_msg.setStyleSheet("""
+                font-size: 28pt; 
+                color: white; 
+                background-color: #F44336; 
+                font-weight: bold; 
+                padding: 30px;
+                border-radius: 10px;
+            """)
+            self.lbl_wood_msg.setAlignment(Qt.AlignCenter)
+            layout.addWidget(self.lbl_wood_msg)
+            self.wood_stick_dialog.setLayout(layout)
+
+        # 更新提示文本
+        self.lbl_wood_msg.setText(
+            f"上层物料已抓空！\n\n请取走第 {layer_idx} 层的垫木！\n\n(完成后请按下机台【复位】按钮)")
+        self.wood_stick_dialog.show()
+
+    def close_wood_stick_dialog(self):
+        """关闭警告弹窗"""
+        if self.wood_stick_dialog and self.wood_stick_dialog.isVisible():
+            self.wood_stick_dialog.hide()
+
 
     def add_point_group(self):
         """新建点位分组"""
