@@ -255,9 +255,6 @@ class Controller(QThread):
         # 暂停检查
         self.check_and_handle_pause()
 
-        # 监听上料位复位信号
-        self.handle_loading_rack_reset()
-
         # === 正常业务流程 ===
         # 1. 批量读取状态寄存器
         start_addr = self.plc.map_modbus_address(const.process_start_addr)
@@ -401,23 +398,6 @@ class Controller(QThread):
             logger.error(f"获取实时起点异常: {e}", exc_info=True)
             # 发生异常时，为了安全，回退到上一次记录的终点
             return self.last_motion_end_point
-
-    def handle_loading_rack_reset(self):
-        """监听上料料车复位信号，"""
-        try:
-            addr = self.plc.map_modbus_address(const.ADDR_PRODUCT_LOADING_RACK_RESET)
-            regs = self.plc.read_holding_registers(addr, 1)
-
-            if regs and regs[0] == const.product_loading_rack_reset:  # 收到 10
-                # 上料索引复位
-                self.loading_index.reset_search_index(const.search_index_name)
-                self.loading_index.reset_search_index(const.head_layer_index_name)
-
-                # 通知plc上位机已经复位完毕
-                self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset_ack)
-
-        except Exception as e:
-            logger.info(e)
 
     def _fill_zero_group(self, a1, a2, a3, a4, a5, a6):
         """辅助函数：将一组地址清零"""
@@ -1661,8 +1641,10 @@ class Controller(QThread):
 
         # 无限等待复位信号 (10)
         if self.wait_for_plc_val(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset, timeout=-1):
-            logger.info("检测到新料车复位信号(10)，发送确认收到(13)...")
+            logger.info("检测到新料车复位信号(10)，发送确认收到(11)...")
             self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset_ack)
+
+            self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK, 0)
 
             logger.info("工人已更换料车并复位，流程重新开始")
             # 返回 False，退出当前调用栈，让主循环重新接收 PLC 的新指令
@@ -1682,21 +1664,24 @@ class Controller(QThread):
         # 1. 触发 UI 非阻塞弹窗
         self.sig_wood_stick_alarm.emit(layer_idx)
 
-        # 2. 通知 PLC 全局状态 (写入 15 亮起报警灯)
+        # 2. 发送状态 (13: 垫木)
         self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK, const.product_loading_rack_wood_stick)
 
         # 3. 阻塞等待人工复位 (按照约定，等待 PLC 在当前动作地址发送 20)
         logger.info("系统挂起：等待工人取走垫木，并按下机台复位按钮(20)...")
 
         # 使用 timeout=-1 无限死等，期间 check_estop 依然有效
-        if self.wait_for_plc_val(process_addr, 20, timeout=-1):
-            logger.info("收到垫木移除复位信号(20)，恢复自动运行！")
+        if self.wait_for_plc_val(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset, timeout=-1):
+            logger.info("收到垫木移除复位信号(10)，恢复自动运行！")
+
+            # (可选) 恢复全局料架状态为正常，发送ack 11
+            self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK_RESET, const.product_loading_rack_reset_ack)
+
+            # 4. 将全局状态地址归零，表示报警解除，恢复正常
+            self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK, 0)
 
             # 通知 UI 关闭弹窗
             self.sig_wood_stick_clear.emit()
-
-            # (可选) 恢复全局料架状态为正常，比如写回 0
-            # self.plc.write_register(const.ADDR_PRODUCT_LOADING_RACK, 0)
 
             return True
 
@@ -3088,7 +3073,7 @@ class Controller(QThread):
         if not cfg_p0:
             logger.error("无法获取安全回撤点(动作76配置为空)")
             return
-
+        
         # 构造 P0 点对象
         p0_coords = cfg_p0[-1]["coords"]
         p0_point = {
@@ -3097,6 +3082,9 @@ class Controller(QThread):
             "photo": 0
         }
         """
+
+        safe_point = copy.deepcopy(start_point)
+        safe_point["coords"][2] = const.loading_safe_z
 
         # 1.3 终点序列 (Target): 放料位配置
         # 读取动作 78 (0x4008E) 自己的配置
@@ -3111,7 +3099,7 @@ class Controller(QThread):
         # ==========================================
 
         # full_sequence = [start_point, p0_point] + process_points_cfg
-        full_sequence = [start_point] + process_points_cfg
+        full_sequence = [start_point, safe_point] + process_points_cfg
 
         logger.info(f"生成放料路径: 起点 -> 安全回撤P0 -> 放料点({len(process_points_cfg)}个)")
 

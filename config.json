@@ -575,12 +575,12 @@
             "type": "standard",
             "points": [
                 {
-                    "name": "Teach_P1",
+                    "name": "Teach_P2",
                     "coords": [
-                        816.5,
-                        -118.53,
-                        0.0,
-                        -53.34
+                        -5.25,
+                        1087.42,
+                        86.18,
+                        -134.51
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -645,23 +645,23 @@
             ],
             "layer_head_points": [
                 {
-                    "name": "L1_Head",
+                    "name": "Teach_P3",
                     "coords": [
-                        -53.41,
-                        259.91,
-                        70.07,
-                        -115.54
+                        -40.9,
+                        242.56,
+                        86.18,
+                        -119.56
                     ],
                     "photo": 0,
                     "config": "elbow_up"
                 },
                 {
-                    "name": "L2_Head",
+                    "name": "Teach_P4",
                     "coords": [
-                        -53.41,
-                        259.91,
-                        -61.93,
-                        -115.54
+                        -40.95,
+                        242.67,
+                        -45.82,
+                        -119.56
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -865,82 +865,28 @@
             "name": "臂去缓存拍照位检测",
             "type": "standard",
             "points": [
+
                 {
-                    "name": "Teach_P1",
+                    "name": "0100",
                     "coords": [
-                        1366.63,
-                        -84.06,
-                        391.29,
-                        8.99
+                        -309.77,
+                        537.21,
+                        -182.88,
+                        -105.83
                     ],
-                    "photo": 0,
-                    "config": "elbow_down"
+                    "photo": 3,
+                    "config": "elbow_up"
                 },
                 {
-                    "name": "Teach_P2",
+                    "name": "0101",
                     "coords": [
-                        1366.63,
-                        -84.06,
-                        500.73,
-                        8.99
+                        -311.31,
+                        599.91,
+                        -182.88,
+                        -101.71
                     ],
-                    "photo": 0,
-                    "config": "elbow_down"
-                },
-                {
-                    "name": "Teach_P3",
-                    "coords": [
-                        924.58,
-                        -184.35,
-                        500.73,
-                        48.97
-                    ],
-                    "photo": 0,
-                    "config": "elbow_down"
-                },
-                {
-                    "name": "Teach_P4",
-                    "coords": [
-                        685.7,
-                        -119.4,
-                        500.73,
-                        61.36
-                    ],
-                    "photo": 0,
-                    "config": "elbow_down"
-                },
-                {
-                    "name": "Teach_P5",
-                    "coords": [
-                        531.3,
-                        -66.03,
-                        500.73,
-                        83.19
-                    ],
-                    "photo": 0,
-                    "config": "elbow_down"
-                },
-                {
-                    "name": "Teach_P6",
-                    "coords": [
-                        487.52,
-                        -51.07,
-                        500.73,
-                        84.86
-                    ],
-                    "photo": 0,
-                    "config": "elbow_down"
-                },
-                {
-                    "name": "Teach_P7",
-                    "coords": [
-                        384.22,
-                        30.34,
-                        500.73,
-                        84.88
-                    ],
-                    "photo": 0,
-                    "config": "elbow_down"
+                    "photo": 3,
+                    "config": "elbow_up"
                 }
             ],
             "d_addr": 143,

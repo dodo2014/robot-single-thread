@@ -146,16 +146,17 @@ loading_y_error_front = 20.0 # 前方多出了20mm，需要减去20mm拉回来�
 loading_x_error_back = 0.0 # 假设：后方料正好(能包住)，前方料因为下垂/视角放大，需要补偿 +20mm 才能包住
 loading_x_error_front = 20.0
 
+loading_safe_z = 600
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8  # 200
-product_loading_rack_empty = 11  # 空料
-product_loading_rack_wood_stick = 12 # 【新增】等待取垫木
+product_loading_rack_empty = 12  # 空料
+product_loading_rack_wood_stick = 13 # 【新增】等待取垫木
 
 # 上料料架复位信号监听地址
-ADDR_PRODUCT_LOADING_RACK_RESET = 0x400C9  # 202
-product_loading_rack_reset = 10  # 空料复位信号，plc发出
-product_loading_rack_reset_ack = 13  # 上位机复位完成，上位机回复plc
+ADDR_PRODUCT_LOADING_RACK_RESET = 0x400C9  # 201
+product_loading_rack_reset = 10  # 空料/取垫木 复位信号，plc发出
+product_loading_rack_reset_ack = 11  # 上位机复位完成，上位机回复plc
 
 # 尺寸检测udp配置
 inspection_udp_ip = '192.168.0.5'
