@@ -335,13 +335,14 @@ class DetectAlgoService:
             z_result = [item['result']['coords'][2] for item in sorted_z_result]
             z_midian = z_result[mid] if n % 2 == 1 else (z_result[mid - 1] + z_result[mid]) / 2
 
-            r_values = [item['result']['coords'][3] for item in sorted_z_result]
-            r_average = sum(r_values) / len(r_values)
+            r_result = [item['result']['coords'][3] for item in sorted_z_result]
+            r_average = sum(r_result) / len(r_result)
+            r_midian = r_result[mid] if n % 2 == 1 else (r_result[mid - 1] + r_result[mid]) / 2
 
             midian_result = sorted_z_result[mid]
             midian_result["result"]["coords"][1] = y_midian
             midian_result["result"]["coords"][2] = z_midian
-            midian_result["result"]["coords"][3] = r_average
+            midian_result["result"]["coords"][3] = r_midian
 
             with open(f"{get_logs_dir()}/detect_algo.log", "a+") as f:
                 for item in sorted_z_result:
@@ -425,8 +426,8 @@ def main():
         start_time = round(time.time() * 1000)
         # response = service.execute_detection(ptype=const.photo_type_loading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
-        # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         print(response)
 
         # 处理结果

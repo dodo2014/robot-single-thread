@@ -2944,7 +2944,6 @@ class Controller(QThread):
         logger.info(f"world angle : {world_angle}")
         world_rad = math.radians(world_angle)
         offset_y = const.product_y_offset * math.cos(world_rad)
-        logger.info(f"4008D offset_y : {offset_y}")
 
         # =======================================================
         # 计算空间位置比例 (Ratio)
@@ -2960,16 +2959,26 @@ class Controller(QThread):
         y_comp = const.loading_y_error_back + (const.loading_y_error_front - const.loading_y_error_back) * x_ratio
 
         # 最终的 Y 坐标 = 视觉真实端头 Y + 1020平移 + 动态补偿
+        logger.info(f"4008D offset_y : {offset_y}, y_comp : {y_comp}")
         target_y = head_y + offset_y + y_comp
 
         # =======================================================
         # X 轴补偿计算 (解决相机侧偏引起的透视+下垂误差)
         # =======================================================
         x_comp = const.loading_x_error_back + (const.loading_x_error_front - const.loading_x_error_back) * x_ratio
+        logger.info(f"4008D x_ratio : {x_ratio}, x_comp : {x_comp}")
+
         target_x = line_x + x_comp
 
+        # 线性插值算出当前槽位需要的角度补偿量
+        r_comp = const.loading_r_error_back + (const.loading_r_error_front - const.loading_r_error_back) * x_ratio
+        logger.info(f"4008D r_ratio : {r_comp}, r_comp : {r_comp}")
+
+        # target_x = line_x
+        # target_y = head_y + offset_y
 
         target_z = line_z
+        # target_r = line_r + r_comp
         target_r = line_r
 
         target_point = {
@@ -2986,7 +2995,7 @@ class Controller(QThread):
         wp1["coords"][2] = process_start_point["coords"][2]
 
         # wp1向前移动35，构造wp2
-        wp2 = self.move_forward(wp1, 25)
+        wp2 = self.move_forward(wp1, 27)
 
         # wp2下降到目标点的z, 构造wp3
         h_delta = target_point["coords"][2] - wp1["coords"][2] + 40
@@ -3007,7 +3016,7 @@ class Controller(QThread):
         way_point_down = self.move_up_down(way_point_forward, -100)
 
         # points = [process_start_point, way_point_up, way_point_forward, way_point_down]
-        points = [process_start_point, wp1, wp2, wp3]
+        points = [process_start_point, wp2, wp3]
 
         """
         # 1、从实时点移动到目标点后面50mm处

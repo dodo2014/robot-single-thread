@@ -42,7 +42,7 @@
 
 	//"end_depth_start": 420, //产品端面的拍摄高度
 	"end_depth_min": 400,
-	"end_depth_max": 440,
+	"end_depth_max": 450,
 	"end_depth_thresh": 10,
 	"end_min_length": 10,      // 端面边缘较短
 	"end_edge_index": 0,		// 返回所有端面边缘中心坐标
