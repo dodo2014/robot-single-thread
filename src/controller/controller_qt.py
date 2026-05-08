@@ -102,6 +102,8 @@ class Controller(QThread):
             logger.error(f"视觉服务启动失败: {e}")
             # 即使失败，Controller 也要继续运行，不能退出
 
+        self.reset_loding_index()
+
         self.running = True  # 标记运行
 
         while self.running:
@@ -130,6 +132,12 @@ class Controller(QThread):
 
         self.wait()  # 等待线程安全退出
         logger.info("控制服务已停止")
+
+    def reset_loding_index(self):
+        self.loading_index.reset_search_index(const.search_index_name)
+        self.loading_index.reset_search_index(const.head_layer_index_name)
+        self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+        self.loading_index.reload_search_index()
 
     # 配置热重载方法 (供界面调用)
     def reload_config(self):
@@ -533,10 +541,11 @@ class Controller(QThread):
 
         point_address = const.point_once_address
         addr_j1, addr_j2, addr_j3, addr_j4, addr_vel, addr_acc = point_address
+        name = point.get("name")
         coords = point.get("coords", [0, 0, 0, 0])
         elbow_config = point.get("config")
         xe, ye, ze, te = coords[0], coords[1], coords[2], coords[3]
-        logger.info(f"发送坐标:{xe},{ye},{ze},{te}")
+        logger.info(f"发送坐标 {name}: {xe},{ye},{ze},{te}")
         try:
             # 逆解运算
             ik_res = ScaraKinematics.inverse_kinematics_v2(xe, ye, ze, te, self.l1, self.l2, self.z0, self.nn3,
@@ -2953,33 +2962,29 @@ class Controller(QThread):
         x_ratio = max(0.0, min(x_ratio, 1.0))  # 限制在 0~1 之间
 
         # =======================================================
+        # X 轴补偿计算 (解决相机侧偏引起的透视+下垂误差)
+        # =======================================================
+        x_comp = const.loading_x_comp_back + (const.loading_x_comp_front - const.loading_x_comp_back) * x_ratio
+        logger.info(f"4008D x_ratio : {x_ratio}, x_comp : {x_comp}")
+
+        # =======================================================
         # Y 轴补偿计算 (解决偏航问题)
         # =======================================================
-        # y_comp = const.loading_y_error_front * x_ratio
-        y_comp = const.loading_y_error_back + (const.loading_y_error_front - const.loading_y_error_back) * x_ratio
+        # y_comp = const.loading_y_comp_front * x_ratio
+        y_comp = const.loading_y_comp_back + (const.loading_y_comp_front - const.loading_y_comp_back) * x_ratio
 
         # 最终的 Y 坐标 = 视觉真实端头 Y + 1020平移 + 动态补偿
         logger.info(f"4008D offset_y : {offset_y}, y_comp : {y_comp}")
-        target_y = head_y + offset_y + y_comp
-
-        # =======================================================
-        # X 轴补偿计算 (解决相机侧偏引起的透视+下垂误差)
-        # =======================================================
-        x_comp = const.loading_x_error_back + (const.loading_x_error_front - const.loading_x_error_back) * x_ratio
-        logger.info(f"4008D x_ratio : {x_ratio}, x_comp : {x_comp}")
-
-        target_x = line_x + x_comp
 
         # 线性插值算出当前槽位需要的角度补偿量
-        r_comp = const.loading_r_error_back + (const.loading_r_error_front - const.loading_r_error_back) * x_ratio
-        logger.info(f"4008D r_ratio : {r_comp}, r_comp : {r_comp}")
+        r_comp = const.loading_r_comp_back + (const.loading_r_comp_front - const.loading_r_comp_back) * x_ratio
+        logger.info(f"4008D r_ratio : {x_ratio}, r_comp : {r_comp}")
 
-        # target_x = line_x
-        # target_y = head_y + offset_y
-
+        target_x = line_x + x_comp
+        target_y = head_y + offset_y + y_comp
         target_z = line_z
-        # target_r = line_r + r_comp
-        target_r = line_r
+        # target_r = line_r
+        target_r = line_r + r_comp
 
         target_point = {
             "name": f"Vision_Gripper_P0",
@@ -2995,7 +3000,7 @@ class Controller(QThread):
         wp1["coords"][2] = process_start_point["coords"][2]
 
         # wp1向前移动35，构造wp2
-        wp2 = self.move_forward(wp1, 27)
+        wp2 = self.move_forward(wp1, const.loading_forward_distance)
 
         # wp2下降到目标点的z, 构造wp3
         h_delta = target_point["coords"][2] - wp1["coords"][2] + 40

@@ -135,19 +135,21 @@ base_depth = 420  # 首层标准深度，最上层拍照位，深度相机与物
 product_cols_per_layer = 5  # 每层的物料数量
 product_total_layers = 2  # 物料的总层数
 tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动 (mm)
-product_y_offset = 980.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
+product_y_offset = 990.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
 depth_interference_x_offset = 20 # 上料区域，精拍点位，为了消除精拍之后的深度干扰，在精拍点位X+方向，增加偏移(mm)
 fine_photo_world_angle = -3.35  # 上料区域精拍点位的末端绝对角度 (度°)
 
+loading_forward_distance = 28 # 夹爪前移距离(mm)，用于包住物料
+
 # 抓料，Y方向偏差 （漂移） 补偿
-loading_x_back = -427.0   # 后方参考 X 坐标；后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
-loading_x_front = -17.0   # 前方参考 X 坐标；
-loading_y_error_back = 0.0 # 后方Y刚好对准(0误差)，前方Y+少了20mm(需要+20补偿)
-loading_y_error_front = 20.0 # 前方多出了20mm，需要减去20mm拉回来，取值-20；前方少，需要加回去，+20
-loading_x_error_back = 0.0 # 假设：后方料正好(能包住)，前方料因为下垂/视角放大，需要补偿 +20mm 才能包住
-loading_x_error_front = 26.5  # 前方的料，需要前移x(mm)，才能包住物料
-loading_r_error_back = 0.0 # 假设后方的料，r角正好对齐物料, 0°表示对齐
-loading_r_error_front = 1.8 # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
+loading_x_back = -385.2   # 后方参考 X 坐标；后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
+loading_x_front = 186.31   # 前方参考 X 坐标；
+loading_x_comp_back = 0.0 # 假设：后方料正好(能包住)，前方料因为下垂/视角放大，需要补偿 +20mm 才能包住
+loading_x_comp_front = 25  # 前方的料，需要前移x(mm)，才能包住物料
+loading_y_comp_back = 0.0 # 后方Y刚好对准(0误差)，前方Y+少了20mm(需要+20补偿)
+loading_y_comp_front = 20.0 # 前方多出了20mm，需要减去20mm拉回来，取值-20；前方少，需要加回去，+20
+loading_r_comp_back = 0.0 # 假设后方的料，r角正好对齐物料, 0°表示对齐
+loading_r_comp_front = 4.8 # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
 
 loading_safe_z = 600
 

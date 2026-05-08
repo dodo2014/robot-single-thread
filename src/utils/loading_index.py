@@ -28,6 +28,15 @@ class LoadingIndex:
                 logger.error(f"读取状态文件失败: {e}")
         return 0
 
+    def reload_search_index(self, key=None):
+        if key:
+            self.load_search_index(key)
+        else:
+            self.current_search_index = self.load_search_index(const.search_index_name)
+            self.current_head_layer_index = self.load_search_index(const.head_layer_index_name)
+            self.last_picked_layer = self.load_search_index(const.last_picked_layer_name)
+
+
     def save_search_index(self, key, index):
         """保存搜寻进度到文件"""
         # self.current_search_index = index
@@ -55,7 +64,7 @@ class LoadingIndex:
 
     def reset_search_index(self, key, value=0):
         """复位搜寻进度（换新料车时调用）"""
-        logger.info(">>> 收到复位指令，已将料架搜寻进度复位 <<<")
+        logger.info(f">>> 上料索引重置, 重置参数 {key}, 值: {value}<<<")
         self.save_search_index(key, value)
 
 if __name__ == "__main__":
