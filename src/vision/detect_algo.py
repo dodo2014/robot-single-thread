@@ -158,23 +158,37 @@ class DetectAlgoService:
             # 1. 检查并尝试重连
             if not self.device.is_alive():
                 logger.info(f"Connection lost, retrying to connect (Attempt {attempt + 1})...")
+
+                # 确保彻底断开旧句柄
+                self.device.disconnect()
+                time.sleep(0.5)
+
                 success, msg = self.device.connect()
                 if not success:
                     last_err = msg
-                    time.sleep(1)
+                    time.sleep(1.0)
                     continue
+                else:
+                    # 【核心修复 2】：连接成功后，绝对不能立刻取图！
+                    # 必须给底层光学传感器 1.5 秒的预热时间，否则立刻取图会触发假掉帧
+                    logger.info("Camera connected, warming up optical sensor...")
+                    time.sleep(1.5)
+
+                    # 预热后，把这 1.5 秒内积攒的废图抽掉，保证曝光正常
+                    if hasattr(self.device, 'flush_frames'):
+                        self.device.flush_frames(num_frames=3)
 
             # 2. 采集图像
-            success, color_frame, depth_frame = self.device.get_frames()
+            success, color_frame, depth_frame = self.device.get_frames(timeout_ms=2000)
             if not success:
                 last_err = "Failed to capture frames"
                 time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
                 # 只有当连续多次（例如超过3次）都拿不到图时，才真正去重启相机
-                if attempt >= 3:
+                if attempt >= 2:
                     logger.warning("Multiple consecutive frame drops, re-initializing pipeline...")
                     self.device.disconnect()
-                    time.sleep(0.5)
-                    self.device.connect()
+                    time.sleep(1.0) # 给 USB 驱动释放句柄的时间
+                    # self.device.connect()
                 # # 采集失败通常意味着链路抖动，尝试重新初始化 pipeline
                 # self.device.connect()
                 continue
@@ -296,17 +310,22 @@ class DetectAlgoService:
         # 在正式获取图像前，排空旧图
         self.device.flush_frames(num_frames=5)
 
+        filter_number = 7
+        required_count = number - filter_number
+
         results = []
         for idx in range(number):
-            if idx < 7:  # 运动到点位之后立即拍照，图像深度不稳定，前7次只触发拍照，不处理
+            if idx < filter_number:  # 运动到点位之后立即拍照，图像深度不稳定，前7次只触发拍照，不处理
                 self.execute_detection(ptype, detect=0)
-            else:
-                result = self.execute_detection(ptype, detect=1)
-                print(f"result is : {result}")
+                time.sleep(0.01)
 
+        while len(results) < required_count:
+            result = self.execute_detection(ptype, detect=1)
+            print(f"result is : {result}")
 
-                if result["code"] == 0:
-                    results.append(result)
+            # 过滤有效深度的值
+            if result["code"] == 0 and result["result"]["coords"][2] <= const.depth_valid_filter:
+                results.append(result)
 
             # 给底层 USB 留出喘息时间，避免阻塞 (30fps = 33ms 一张)
             time.sleep(0.01)
@@ -425,9 +444,9 @@ def main():
 
         start_time = round(time.time() * 1000)
         # response = service.execute_detection(ptype=const.photo_type_loading)
-        # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         print(response)
 
         # 处理结果

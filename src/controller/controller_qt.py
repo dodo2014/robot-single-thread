@@ -23,7 +23,8 @@ class Controller(QThread):
     log_signal = pyqtSignal(str)
     sig_wood_stick_alarm = pyqtSignal(int)  # 触发垫木报警弹窗 (传递层数)
     sig_wood_stick_clear = pyqtSignal()  # 关闭垫木报警弹窗
-
+    sig_unloading_wood_stick_alarm = pyqtSignal()
+    sig_unloading_wood_stick_clear = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -103,7 +104,6 @@ class Controller(QThread):
             # 即使失败，Controller 也要继续运行，不能退出
 
         self.reset_loding_index()
-
         self.running = True  # 标记运行
 
         while self.running:
@@ -814,10 +814,10 @@ class Controller(QThread):
                     detected_coords = [detected_coords]
 
                 trigger_type = "retrieve"  # 默认抓取
-                # res = "ng"
                 res = "error"
-
                 exists = result.get("exists")
+
+                item_index = result.get("index", -1)
 
                 if ptype == const.photo_type_normal:  # 1/有料，报ok
                     if exists == 1:
@@ -848,7 +848,8 @@ class Controller(QThread):
                 return {
                     "res": res,
                     "coords": detected_coords,
-                    "trigger": trigger_type
+                    "trigger": trigger_type,
+                    "index": item_index
                 }
             else:
                 logger.error(f"视觉识别失败: {algo_response.get('err_msg')}")
@@ -1221,6 +1222,38 @@ class Controller(QThread):
         logger.error("视觉重拍次数过多，强制停止")
         return False
 
+    def _handle_wood_stick_placement(self, layer_idx=None):
+        """
+        处理下料跨层放垫木逻辑：
+        发送报警 -> 触发 UI -> 阻塞死等复位 -> 恢复
+        """
+        logger.warning("下料区检测到新的一层 (index=0)，挂起等待人工放置垫木！")
+
+        # 1. 触发 UI 非阻塞弹窗 (你可以在界面新增一个类似的信号弹窗)
+        self.sig_unloading_wood_stick_alarm.emit()
+
+        # 2. 通知 PLC 亮起报警灯 (写入 14)
+        logger.info(
+            f"发送放垫木提示: {hex(const.ADDR_PRODUCT_UNLOADING_RACK)} -> {const.product_unloading_rack_wood_stick}")
+        self.plc.write_register(const.ADDR_PRODUCT_UNLOADING_RACK, const.product_unloading_rack_wood_stick)
+
+        # 3. 阻塞等待人工复位 (死等 10)
+        logger.info("系统挂起：等待工人放置垫木，并按下机台复位按钮(10)...")
+
+        if self.wait_for_plc_val(const.ADDR_PRODUCT_UNLOADING_RACK_RESET, const.product_unloading_rack_reset,
+                                 timeout=-1):
+            logger.info("收到放垫木复位信号(10)，发送 ACK(11)...")
+            self.plc.write_register(const.ADDR_PRODUCT_UNLOADING_RACK_RESET, const.product_unloading_rack_reset_ack)
+
+            # 报警解除，恢复正常状态 0
+            self.plc.write_register(const.ADDR_PRODUCT_UNLOADING_RACK, 0)
+
+            self.sig_unloading_wood_stick_clear.emit()
+            logger.info("垫木放置完成，恢复自动下料！")
+            return True
+
+        return False  # 触发急停
+
     def handle_vision_recursive_v1(self, process_addr, point, loading=None, photo_type=const.photo_type_normal):
         """
         :param process_addr: 动作地址位
@@ -1250,12 +1283,12 @@ class Controller(QThread):
             # 2. 解析结果
             res_status = result.get("res", "error")
             coords = result.get("coords", [])
+            item_index = result.get("index", -1)
 
             # === 状态分支处理 ===
             if res_status == "error":
                 logger.error(f"视觉返回 硬件/算法异常 (ERROR)")
                 return "ERROR"
-
             elif res_status == "empty":
                 logger.info("视觉检测完成：该位置无物料 (EMPTY)")
                 return "EMPTY"
@@ -1308,6 +1341,15 @@ class Controller(QThread):
                 # time.sleep(0.1)
                 continue
             """
+
+            # =======================================================
+            # 【核心新增】：下料区放垫木判定拦截
+            # =======================================================
+            if photo_type == const.photo_type_unloading and item_index == 0:
+                # 阻塞在这里，直到工人放好木条并复位
+                if not self._handle_wood_stick_placement():
+                    # 如果返回 False，说明被急停打断，直接退出
+                    return False
 
             # === 距离合适 (<= 400)，计算最终抓取坐标并保存 ===
             transform_coords = []
@@ -1705,13 +1747,13 @@ class Controller(QThread):
         logger.info("========================================")
         logger.info("开始执行料架映射扫描 (Smart Pallet Mapping)...")
 
-        COLS_PER_LAYER = const.product_cols_per_layer
+        COLS_PER_LAYER = const.product_per_layer
         # 每一层的固定落差
         LAYER_GAP = const.product_height + const.interval_height  # 177.0 mm (物料 + 木条)
         # 基础高度，相机到物料的拍摄距离
         BASE_DEPTH = const.base_depth
         # 可信深度，需要加上容差
-        MAX_RELIABLE_DEPTH = BASE_DEPTH + LAYER_GAP + const.tolerange
+        MAX_RELIABLE_DEPTH = BASE_DEPTH + LAYER_GAP + const.depth_tolerange
 
         # 总层数
         total_points = len(search_points)
@@ -2018,7 +2060,7 @@ class Controller(QThread):
         # 这里假设你新增了一个 current_layer_index 变量来记忆
         # start_layer = getattr(self.loading_index, const.head_layer_index_name, 0)
 
-        cols_per_layer = const.product_cols_per_layer
+        cols_per_layer = const.product_per_layer
         current_idx = self.loading_index.current_search_index
         start_layer = current_idx // cols_per_layer
 
@@ -2104,7 +2146,7 @@ class Controller(QThread):
             return False
 
         # 提取当前层预设的 5 个精确卡槽点
-        # cols_per_layer = const.product_cols_per_layer
+        # cols_per_layer = const.product_per_layer
         start_idx = found_layer_idx * cols_per_layer
         end_idx = start_idx + cols_per_layer
         current_layer_precise_pts = precise_points[start_idx:end_idx]
@@ -2961,6 +3003,9 @@ class Controller(QThread):
         x_ratio = (line_x - const.loading_x_back) / (const.loading_x_front - const.loading_x_back)
         x_ratio = max(0.0, min(x_ratio, 1.0))  # 限制在 0~1 之间
 
+        if x_ratio >= 0.85:
+            x_ratio = 1
+
         # =======================================================
         # X 轴补偿计算 (解决相机侧偏引起的透视+下垂误差)
         # =======================================================
@@ -2981,10 +3026,11 @@ class Controller(QThread):
         logger.info(f"4008D r_ratio : {x_ratio}, r_comp : {r_comp}")
 
         target_x = line_x + x_comp
-        target_y = head_y + offset_y + y_comp
+        # target_y = head_y + offset_y + y_comp
+        target_y = head_y + offset_y
         target_z = line_z
-        # target_r = line_r
-        target_r = line_r + r_comp
+        target_r = line_r
+        # target_r = line_r + r_comp
 
         target_point = {
             "name": f"Vision_Gripper_P0",
@@ -3222,18 +3268,22 @@ class Controller(QThread):
         last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40090/262288
         last_process_points = self.cfg_manager.get_process_config(hex(last_process_addr).upper()).get("points")
         # 取最后一个点的坐标，作为当前流程的起始坐标
-        process_start_point = last_process_points[-1]
+        # process_start_point = last_process_points[-1]
 
-        # 2. 构建点位列表 [Origin, P1, P2...]
+        # 取实时点做起始点
+        process_start_point = self.get_realtime_point()
+
         points = [process_start_point]
+        # 2. 构建点位列表 [Origin, P1, P2...]
         logger.info(f"process address: {process_addr} : {process_start_point['name']}")
+
+        # 获取配置点
         process_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("points", [])
         if not points:
             logger.error("未找到点位配置")
             return
 
         points.extend(process_points)
-        points_count = len(points)
 
         logger.info(f"point list: {points}")
 
@@ -3263,7 +3313,7 @@ class Controller(QThread):
         source_addr = last_process_addr
 
         # 3. 读取视觉数据，eg:[p1, p2, p3]
-        vision_points_coords = self.get_vision_data(source_addr)
+        vision_points_coords = self.get_vision_data(source_addr, const.photo_type_unloading)
         if not vision_points_coords:
             logger.error(f"未找到地址 {hex(source_addr)} 的视觉数据")
             return
@@ -3563,6 +3613,8 @@ class Controller(QThread):
     # 放垫木位去等待位
     def handle_process_0x4009A(self, process_addr, value):
         if value != 10:
+            return
+        if value:
             return
 
         logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程: 放垫木位去等待位")

@@ -42,13 +42,6 @@ class GroupInputDialog(QDialog):
 
         layout.addWidget(self.button_box)
 
-        # 【新增】垫木提示框实例
-        self.wood_stick_dialog = None
-
-        # 【新增】连接信号到槽函数
-        self.controller.sig_wood_stick_alarm.connect(self.show_wood_stick_dialog)
-        self.controller.sig_wood_stick_clear.connect(self.close_wood_stick_dialog)
-
 
     def get_data(self):
         """返回用户输入的数据 (display_name, json_key)"""
@@ -79,6 +72,20 @@ class ConfigEditorUI(QMainWindow):
         self.ui_timer.timeout.connect(self.refresh_realtime_display)
         # 设置刷新频率，例如 200ms (5Hz)，人眼看着流畅即可，不必太快
         self.ui_timer.start(200)
+
+        # 【新增】垫木提示框实例
+        self.wood_stick_dialog = None
+
+        # 【新增】连接信号到槽函数
+        self.controller.sig_wood_stick_alarm.connect(self.show_wood_stick_dialog)
+        self.controller.sig_wood_stick_clear.connect(self.close_wood_stick_dialog)
+
+        # 下料放垫木提示框
+        self.unloading_wood_stick_dialog = None
+        self.controller.sig_unloading_wood_stick_alarm.connect(self.show_unloading_wood_place_dialog)
+        self.controller.sig_unloading_wood_stick_clear.connect(self.close_unloading_wood_place_dialog)
+
+
 
     def init_ui(self):
         central_widget = QWidget()
@@ -1163,7 +1170,6 @@ class ConfigEditorUI(QMainWindow):
     #         self.table_points.removeRow(current_row)
 
     # === 动态分组管理槽函数 ===
-
     # =======================================================
     # 【新增】UI 槽函数
     # =======================================================
@@ -1200,13 +1206,42 @@ class ConfigEditorUI(QMainWindow):
         if self.wood_stick_dialog and self.wood_stick_dialog.isVisible():
             self.wood_stick_dialog.hide()
 
+    def show_unloading_wood_place_dialog(self, code):
+        """显示非阻塞警告弹窗"""
+        if not self.unloading_wood_stick_dialog:
+            self.unloading_wood_stick_dialog = QDialog(self)
+            self.unloading_wood_stick_dialog.setWindowTitle("⚠️ 人工干预请求")
+            # 窗口置顶，且非模态（不阻塞后面界面的点击，虽然通常这时候也没人点）
+            self.unloading_wood_stick_dialog.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.Tool)
+            self.unloading_wood_stick_dialog.setModal(False)
+
+            layout = QVBoxLayout()
+            self.lbl_wood_msg = QLabel("")
+            self.lbl_wood_msg.setStyleSheet("""
+                font-size: 28pt; 
+                color: white; 
+                background-color: #F44336; 
+                font-weight: bold; 
+                padding: 30px;
+                border-radius: 10px;
+            """)
+            self.lbl_wood_msg.setAlignment(Qt.AlignCenter)
+            layout.addWidget(self.lbl_wood_msg)
+            self.unloading_wood_stick_dialog.setLayout(layout)
+
+        self.lbl_wood_msg.setText(f"请放置垫木！\n\n(完成后请按下机台【复位】按钮)")
+        self.unloading_wood_stick_dialog.show()
+
+    def close_unloading_wood_place_dialog(self):
+        """关闭警告弹窗"""
+        if self.unloading_wood_stick_dialog and self.unloading_wood_stick_dialog.isVisible():
+            self.unloading_wood_stick_dialog.hide()
 
     def add_point_group(self):
         """新建点位分组"""
         if not self.tree_processes.currentItem():
             QMessageBox.warning(self, "提示", "请先在左侧选择一个动作！")
             return
-
 
         # 1. 弹出自定义对话框
         dialog = GroupInputDialog(self)
@@ -1218,7 +1253,6 @@ class ConfigEditorUI(QMainWindow):
             if not display_name or not json_key:
                 QMessageBox.warning(self, "警告", "显示名称和 JSON Key 均不能为空！")
                 return
-
 
             # 防重校验：检查现有的 tab 里有没有这个 key
             for i in range(self.tabs_points.count()):

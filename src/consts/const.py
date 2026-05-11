@@ -106,7 +106,7 @@ last_process_addr_map = {
 # 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
 photo_type_normal = 1  # 普通拍照
 photo_type_loading = 2  # 上料
-photo_type_find_head = 5  # 上料区找端头
+photo_type_find_head = 5  # 上料区找料头
 photo_type_unloading = 3  # 下料
 photo_type_aluminum = 4  # 铝屑识别
 
@@ -132,25 +132,28 @@ product_height = 117  # 单个产品的高度(mm)
 product_width = 123  # 单个产品的宽度(mm)
 interval_height = 15  # 层与层之间间隔木条的高度（mm）
 base_depth = 420  # 首层标准深度，最上层拍照位，深度相机与物料的距离,低于这个值，物料上沿的深度会丢失, (mm)
-product_cols_per_layer = 5  # 每层的物料数量
-product_total_layers = 2  # 物料的总层数
-tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动 (mm)
-product_y_offset = 990.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
+depth_tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动 (mm)
+depth_valid_filter = 450 # 相机距离物料的拍摄高度420mm，漂移会增加到440mm，超过阈值的深度直接过滤
+product_per_layer = 5  # 每层的物料数量
+product_total_layers = 6  # 物料的总层数
+
+product_y_offset = 1000.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
 depth_interference_x_offset = 20 # 上料区域，精拍点位，为了消除精拍之后的深度干扰，在精拍点位X+方向，增加偏移(mm)
 fine_photo_world_angle = -3.35  # 上料区域精拍点位的末端绝对角度 (度°)
 
 loading_forward_distance = 28 # 夹爪前移距离(mm)，用于包住物料
 
-# 抓料，Y方向偏差 （漂移） 补偿
-loading_x_back = -385.2   # 后方参考 X 坐标；后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
-loading_x_front = 186.31   # 前方参考 X 坐标；
+# 抓料，系统漂移+透视视差补偿
+loading_x_back = -373   # 后方参考 X 坐标；后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
+loading_x_front = 252   # 前方参考 X 坐标；
 loading_x_comp_back = 0.0 # 假设：后方料正好(能包住)，前方料因为下垂/视角放大，需要补偿 +20mm 才能包住
-loading_x_comp_front = 25  # 前方的料，需要前移x(mm)，才能包住物料
+loading_x_comp_front = 28  # 前方的料，需要前移x(mm)，才能包住物料
 loading_y_comp_back = 0.0 # 后方Y刚好对准(0误差)，前方Y+少了20mm(需要+20补偿)
 loading_y_comp_front = 20.0 # 前方多出了20mm，需要减去20mm拉回来，取值-20；前方少，需要加回去，+20
 loading_r_comp_back = 0.0 # 假设后方的料，r角正好对齐物料, 0°表示对齐
-loading_r_comp_front = 4.8 # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
+loading_r_comp_front = 5 # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
 
+# 上料安全高度
 loading_safe_z = 600
 
 # 上料架的状态地址，用于发送上料架状态数据
@@ -162,6 +165,16 @@ product_loading_rack_wood_stick = 13 # 【新增】等待取垫木
 ADDR_PRODUCT_LOADING_RACK_RESET = 0x400C9  # 201
 product_loading_rack_reset = 10  # 空料/取垫木 复位信号，plc发出
 product_loading_rack_reset_ack = 11  # 上位机复位完成，上位机回复plc
+
+# 下料架的状态地址，用于发送下料架状态数据
+ADDR_PRODUCT_UNLOADING_RACK = 0x400CA      # 202
+product_unloading_rack_wood_stick = 12     # 提示放垫木
+
+# 下料架复位信号监听地址
+ADDR_PRODUCT_UNLOADING_RACK_RESET = 0x400CB # 203
+product_unloading_rack_reset = 10          # 复位信号，plc发出
+product_unloading_rack_reset_ack = 11      # 上位机复位完成，上位机回复plc
+
 
 # 尺寸检测udp配置
 inspection_udp_ip = '192.168.0.5'
