@@ -140,7 +140,8 @@ class OrbbecCameraDevice:
             color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
             color_profile = None
 
-            formats_to_try = [OBFormat.MJPG, OBFormat.RGB]
+            # formats_to_try = [OBFormat.MJPG, OBFormat.RGB]
+            formats_to_try = [OBFormat.RGB, OBFormat.YUYV]
             # 尝试队列：MJPG -> RGB -> 默认, 1280*720不支持RGB, 优先使用MJPG
             for fmt in formats_to_try:
                 try:
@@ -176,7 +177,7 @@ class OrbbecCameraDevice:
             # 3. 设置软件对齐
             # gemini 336l 不支持720p下的硬件对齐(OBAlignMode.HW_MODE)
             logger.info("Setting alignment mode to SW_MODE...")
-            self.config.set_align_mode(OBAlignMode.SW_MODE)
+            # self.config.set_align_mode(OBAlignMode.SW_MODE)
 
             # 标记配置成功
             self.is_stream_configured = True
