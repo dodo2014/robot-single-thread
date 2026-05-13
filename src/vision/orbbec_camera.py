@@ -1,6 +1,6 @@
 import sys
 import traceback
-from pyorbbecsdk import (Pipeline, Config, Context, OBError,
+from pyorbbecsdk import (AlignFilter, Pipeline, Config, Context, OBError,
                          OBFormat, OBStreamType, OBAlignMode, OBSensorType)
 from src.utils import logger
 
@@ -19,6 +19,8 @@ class OrbbecCameraDevice:
 
         self.pipeline = None
         self.config = None
+
+        self.align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
 
         # 流配置 标志位
         # self.is_stream_configured = False
@@ -58,13 +60,17 @@ class OrbbecCameraDevice:
 
             color_profile = None
 
-            formats_to_try = [OBFormat.MJPG, OBFormat.RGB]
+            # formats_to_try = [OBFormat.MJPG, OBFormat.RGB]
+            formats_to_try = [OBFormat.RGB, OBFormat.YUYV]
             # 尝试队列：MJPG -> RGB -> 默认, 1280*720不支持RGB, 优先使用MJPG
             for fmt in formats_to_try:
                 try:
                     color_profile = color_profiles.get_video_stream_profile(
                         self.width, self.height, fmt, self.fps
                     )
+                    # color_profile = color_profiles.get_video_stream_profile(
+                    #     640, 480, fmt, self.fps
+                    # )
                     if color_profile:
                         logger.info(f"Matched Color profile: {fmt.name} {self.width}x{self.height} @{self.fps}fps")
                         break
@@ -84,8 +90,11 @@ class OrbbecCameraDevice:
                 depth_profile = depth_profiles.get_video_stream_profile(
                     self.width, self.height, OBFormat.Y16, self.fps
                 )
+                # depth_profile = depth_profiles.get_video_stream_profile(
+                #     848, 480, OBFormat.Y16, self.fps
+                # )
                 self.config.enable_stream(depth_profile)
-                logger.info(f"Depth stream enabled: {self.width}x{self.height} @{self.fps}fps")
+                # logger.info(f"Depth stream enabled: {self.width}x{self.height} @{self.fps}fps")
             except Exception as e:
                 logger.warning(f"Warning: Specific Depth profile not supported ({e}), using default.")
                 self.config.enable_stream(OBStreamType.DEPTH_STREAM)
@@ -93,7 +102,7 @@ class OrbbecCameraDevice:
             # 3. 设置软件对齐
             # gemini 336l 不支持720p下的硬件对齐(OBAlignMode.HW_MODE), 如果运行报错，可以注释掉软件对齐
             # logger.info("Setting alignment mode to SW_MODE...")
-            self.config.set_align_mode(OBAlignMode.SW_MODE)
+            # self.config.set_align_mode(OBAlignMode.SW_MODE)
 
             # 在设置深度流之后，添加验证
             logger.info("=== Stream Configuration Summary ===")
@@ -259,8 +268,15 @@ class OrbbecCameraDevice:
             if not frames:
                 return False, None, None
 
-            color_frame = frames.get_color_frame()
-            depth_frame = frames.get_depth_frame()
+            try:
+                aligned_frames = self.align_filter.process(frames)
+                aligned_frames = aligned_frames.as_frame_set()
+            except OBError as e:
+                logger.error(f"Alignment failed: {e}")
+                return False, None, None
+
+            color_frame = aligned_frames.get_color_frame()
+            depth_frame = aligned_frames.get_depth_frame()
 
             # if color_frame and depth_frame:
             #     return True, color_frame, depth_frame
@@ -282,9 +298,9 @@ class OrbbecCameraDevice:
                     return False, None, None
 
         except OBError as e:
-            logger.error(f"Wait for frames error: {e}")
+            logger.error(f"Wait for frames error: {e} \n {traceback.format_exc()}")
         except Exception as e:
-            logger.error(f"Unexpected error getting frames: {e}")
+            logger.error(f"Unexpected error getting frames: {e}\n {traceback.format_exc()}")
 
         return False, None, None
 
@@ -467,7 +483,7 @@ if __name__ == "__main__":
         camera.flush_frames(5)
 
         # 运行诊断
-        for i in range(10):
+        for i in range(5):
             camera.diagnose_alignment_issue()
             logger.info("\n\n")
     else:

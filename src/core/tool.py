@@ -82,6 +82,8 @@ def compute_gripper_target(
         # x_f_rot = xc * math.cos(rad_cam) - yc * math.sin(rad_cam)
         # y_f_rot = xc * math.sin(rad_cam) + yc * math.cos(rad_cam)
 
+
+        # 由于相机实际安装有翻转镜像，所以直接变换；此处使用三角变换，无论如何变换，都不能实现下面的映射关系
         x_f_rot = -yc
         y_f_rot = -xc
 

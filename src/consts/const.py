@@ -107,6 +107,7 @@ last_process_addr_map = {
 photo_type_normal = 1  # 普通拍照
 photo_type_loading = 2  # 上料
 photo_type_find_head = 5  # 上料区找料头
+
 photo_type_unloading = 3  # 下料
 photo_type_aluminum = 4  # 铝屑识别
 
@@ -130,7 +131,7 @@ last_picked_layer_name = "last_picked_layer"
 # 上料区物料参数
 product_height = 117  # 单个产品的高度(mm)
 product_width = 123  # 单个产品的宽度(mm)
-interval_height = 15  # 层与层之间间隔木条的高度（mm）
+interval_height = 15  # 层与层之间垫木木条的高度（mm）
 base_depth = 420  # 首层标准深度，最上层拍照位，深度相机与物料的距离,低于这个值，物料上沿的深度会丢失, (mm)
 depth_tolerange = 30.0  # 机械臂扫描，相机拍照深度z的安全容差，允许深度数据有 30mm 的向下波动 (mm)
 depth_valid_filter = 450 # 相机距离物料的拍摄高度420mm，漂移会增加到440mm，超过阈值的深度直接过滤
@@ -155,6 +156,15 @@ loading_r_comp_front = 5 # 假设后方的料，r角有偏差，加上之后才�
 
 # 上料安全高度
 loading_safe_z = 600
+
+# 下料区域参数
+unloading_safe_z = 600 # 下料安全高度
+unloding_x_list = [200, 350, 500, 650, 800] # 5个料位的绝对X坐标
+unloding_y = -1240    #  固定的Y坐标
+unloading_layer_0_z = -100  # 第0层的放料高度
+unloading_layer_gap = product_height + interval_height  # 产品高度 + 垫木高度
+fine_unloading_world_angle = 2  # 放料末端绝对角度°
+
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8  # 200

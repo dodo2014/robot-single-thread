@@ -266,8 +266,6 @@ class DetectAlgoService:
 
                 result = self.detector.detect(ptype, color_img, depth_img)
 
-                # logger.info(f"detector result: {result}")
-
                 if self.depth_show:
                     timestamp = int(time.time() * 1000)
                     date_str = time.strftime("%Y%m%d", time.localtime(timestamp / 1000))
@@ -443,8 +441,8 @@ def main():
         #     time.sleep(2)
 
         start_time = round(time.time() * 1000)
-        # response = service.execute_detection(ptype=const.photo_type_loading)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
+        response = service.execute_detection(ptype=const.photo_type_loading, detect=1)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         print(response)

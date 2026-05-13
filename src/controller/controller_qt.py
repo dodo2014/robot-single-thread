@@ -860,11 +860,14 @@ class Controller(QThread):
 
         return {"res": "error", "coords": [], "trigger": ""}
 
-    def save_vision_data(self, process_addr, coords_list, photo_type=None):
+    def save_vision_data(self, process_addr, coords_list, photo_type=None, layer=None, index=None):
         """
         保存视觉坐标数据
-        :param process_addr: 动作地址 (int)，如 0x4008C
-        :param coords_list: 坐标列表 [[x,y,z,r], ...]
+        :param process_addr, 动作地址 (int)，如 0x4008C
+        :param coords_list, 坐标列表 [[x,y,z,r], ...]
+        :param photo_type, 拍照动作类型
+        :param layer, 物料层号， 下料用
+        :param index, 当前层的物料索引号， 下料用
         """
         key = hex(process_addr)  # 转成字符串 "0x4008c" 作为 Key
 
@@ -876,7 +879,13 @@ class Controller(QThread):
         # 1. 更新内存
         if key not in self.vision_data_cache:
             self.vision_data_cache[key] = {}
-        self.vision_data_cache[key][photo_type] = coords_list
+
+        # self.vision_data_cache[key][photo_type] = coords_list
+        self.vision_data_cache[key][photo_type] = {
+            "coords": coords_list,
+            "layer": layer,
+            "index": index
+        }
 
         # 2. 更新文件 (全量保存，防止覆盖其他动作的数据)
         try:
@@ -897,7 +906,9 @@ class Controller(QThread):
             current_data[key][str(photo_type)] = {
                 "desc": const.PHOTO_TYPE_DESC[photo_type],
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "coords": coords_list
+                "coords": coords_list,
+                "layer": layer,
+                "index": index
             }
 
             # 写入文件
@@ -925,17 +936,43 @@ class Controller(QThread):
 
         # 1. 优先从内存读
         if key in self.vision_data_cache and photo_type in self.vision_data_cache[key]:
-            return self.vision_data_cache[key][photo_type]
+            data = self.vision_data_cache[key][photo_type]
+            return data.get("coords", [])
 
         # 2. 内存没有，尝试从文件重新加载 (应对程序重启的情况)
         self.load_vision_file()
 
         # 再次从缓存读取
         if key in self.vision_data_cache and photo_type in self.vision_data_cache[key]:
-            return self.vision_data_cache[key][photo_type]
+            data = self.vision_data_cache[key][photo_type]
+            return data.get("coords", [])
 
         logger.warning(f"未找到视觉数据: 地址={key}, 类型={photo_type}")
         return []
+
+    def get_vision_data_full(self, process_addr, photo_type=None):
+        """
+       【新增方法】获取完整数据（包含 coords、layer、index）
+        :return: dict {"coords": [...], "layer": x, "index": x}
+        """
+        key = hex(process_addr)
+
+        if photo_type is None:
+            logger.warning("获取完整数据失败：未指定photo_type")
+            return {"coords": [], "layer": None, "index": None}
+
+        # 内存读取
+        if key in self.vision_data_cache and photo_type in self.vision_data_cache[key]:
+            return self.vision_data_cache[key][photo_type]
+
+        # 从文件加载
+        self.load_vision_file()
+
+        if key in self.vision_data_cache and photo_type in self.vision_data_cache[key]:
+            return self.vision_data_cache[key][photo_type]
+
+        logger.warning(f"未找到完整视觉数据: 地址={key}, 类型={photo_type}")
+        return {"coords": [], "layer": None, "index": None}
 
     def load_vision_file(self):
         """从文件加载视觉坐标数据到内存"""
@@ -954,7 +991,12 @@ class Controller(QThread):
                 # 遍历photo_type
                 for photo_type_str, value in type_dict.items():
                     photo_type = int(photo_type_str)
-                    self.vision_data_cache[addr_key][photo_type] = value.get("coords", [])
+                    # self.vision_data_cache[addr_key][photo_type] = value.get("coords", [])
+                    self.vision_data_cache[addr_key][photo_type] = {
+                        "coords": value.get("coords", []),
+                        "layer": value.get("layer"),
+                        "index": value.get("index")
+                    }
 
         except Exception as e:
             logger.error(f"读取视觉文件失败: {e}")
@@ -1284,6 +1326,7 @@ class Controller(QThread):
             res_status = result.get("res", "error")
             coords = result.get("coords", [])
             item_index = result.get("index", -1)
+            layer = result.get("layer", -1)
 
             # === 状态分支处理 ===
             if res_status == "error":
@@ -1370,7 +1413,7 @@ class Controller(QThread):
             # 保存转换后的视觉坐标，供运动动作读取
             # eg：保存到 0x4008C (动作76) 的名下，供 77 读取
             if photo_type in (const.photo_type_loading, const.photo_type_find_head, const.photo_type_unloading):
-                self.save_vision_data(process_addr, transform_coords, photo_type=photo_type)
+                self.save_vision_data(process_addr, transform_coords, photo_type=photo_type, layer=layer, index=item_index)
 
             return "OK"  # eg: 动作 76 任务完成
 
@@ -1703,7 +1746,6 @@ class Controller(QThread):
 
         return False
 
-
     # 处理取垫木挂起逻辑的辅助函数
     def _handle_wood_stick_removal(self, process_addr, layer_idx):
         """
@@ -1737,7 +1779,6 @@ class Controller(QThread):
             return True
 
         return False  # 触发急停或程序退出
-
 
     def scan_rack_depth_mapping(self, process_addr, search_points, config, loading, photo_type):
         """
@@ -1953,10 +1994,10 @@ class Controller(QThread):
                     target_y = y_f + const.product_y_offset
 
                     # 3. 根据定义的末端绝对角度，计算j4
-                    x_f_p= x_f
+                    x_f_p = x_f
                     y_f_p = target_y
                     # 取原本悬停的安全 Z 高度
-                    z_f_p =  target_point["coords"][2]
+                    z_f_p = target_point["coords"][2]
                     config_f_p = target_point.get("config", "elbow_up")
 
                     j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
@@ -2104,7 +2145,7 @@ class Controller(QThread):
                     # else:
                     #     logger.error("视觉返回OK，但无法获取端头坐标数据")
 
-                    if p_head_data and len(p_head_data.get("coords",[])) > 0:
+                    if p_head_data and len(p_head_data.get("coords", [])) > 0:
                         logger.info(f"第 {layer_idx} 层端头发现物料！")
                         target_material_base_coord = p_head_data.get("coords")[0]
                         found_layer_idx = layer_idx
@@ -2460,7 +2501,6 @@ class Controller(QThread):
                 return False
 
         return False
-
 
     # 设备初始化
     def handle_process_0x400A7(self, process_addr, value):
@@ -2969,7 +3009,7 @@ class Controller(QThread):
             logger.error(f"未找到地址 {hex(source_addr)} 的抓料视觉数据")
             return
 
-        head_x, head_y, head_z, head_r = vision_head_coords[0]    # 料头坐标
+        head_x, head_y, head_z, head_r = vision_head_coords[0]  # 料头坐标
         line_x, line_y, line_z, line_r = vision_loading_coords[0]  # 拍摄的抓取坐标
 
         # 将视觉坐标转换为标准的点对象格式
@@ -3298,6 +3338,14 @@ class Controller(QThread):
 
     # 臂去放料位放料
     def handle_process_0x40092(self, process_addr, value):
+        """
+        下料点位的计算，两种方案
+        方案一：使用视觉给出的z, 结合X坐标查表生成坐标
+        方案二：使用视觉给出的层号layer和索引index，结合下料参数，使用查表法生成坐标
+        :param process_addr:
+        :param value:
+        :return:
+        """
         if value != 10:
             return
 
@@ -3308,32 +3356,68 @@ class Controller(QThread):
         # process_start_point = last_process_points[-1]
 
         process_start_point = self.get_realtime_point()
+        points = [process_start_point]
 
-        # 2. 获取上个动作中，视觉给出的源数据地址
+        # 从缓存位走到安全位置
+        # 获取点位配置
+        process_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("points", [])
+        if not process_points:
+            logger.error("未找到点位配置")
+            return
+
+        points.extend(process_points)
+
+        # 2. 获取下料拍照动作中，视觉给出的源数据地址
         source_addr = last_process_addr
 
         # 3. 读取视觉数据，eg:[p1, p2, p3]
-        vision_points_coords = self.get_vision_data(source_addr, const.photo_type_unloading)
-        if not vision_points_coords:
+        vision_points_data = self.get_vision_data_full(source_addr, const.photo_type_unloading)
+        coords = vision_points_data["coords"]
+        layer = vision_points_data["layer"]
+        index = vision_points_data["index"]
+        if not coords:
             logger.error(f"未找到地址 {hex(source_addr)} 的视觉数据")
             return
 
-        # 将视觉坐标转换为标准的点对象格式
-        # 构建路径: Start(P0) -> P1 -> P2 -> P3
-        target_points_list = []
-        for idx, coords in enumerate(vision_points_coords):
-            pt = {
-                "name": f"Vision_P{idx + 1}",
-                "coords": coords,
-                "photo": 0
-            }
-            target_points_list.append(pt)
+        #############################################################
+        # 使用查表法构造下料坐标
+        #############################################################
 
-            # relative_point = self.process_camera_result_to_plc_data(coords)
-            # relative_point["name"] = f"Vision_P{idx + 1}"
-            # target_points_list.append(relative_point)
+        # 构造下料点位
+        target_x = const.unloding_x_list[index]  # 提取X坐标
+        target_y = const.unloding_y  # 使用固定Y坐标
 
-        points = [process_start_point] + target_points_list
+        # 提取 Z 坐标 (基于底层高度 + 修正后的132mm层高 * 层数)
+        # 注意：这里如果是从底层往上码垛，那就是 layer_0_z + layer * 132
+
+        # 设定一个安全抛料距离，宁可高空抛物，绝不硬压
+        target_z = const.unloading_layer_0_z + (layer * const.unloading_layer_gap)
+
+        # SAFE_DROP_Z = 3.0
+        # target_z = const.unloading_layer_0_z + (layer * const.unloading_layer_gap) + SAFE_DROP_Z
+
+        # Z 也可以使用视觉给出的坐标
+        # target_z = coords[0][2]
+
+        logger.info(f"查表计算放料目标: 第{layer}层-第{index}列")
+        logger.info(f"目标绝对坐标: X={target_x}, Y={target_y}, Z={target_z} (层高132mm)")
+
+        # 计算 J4 角度以维持放料姿态绝对平行
+        config_curr = "elbow_down"  # 下料一般用单一姿态
+        j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
+            target_x, target_y, target_z, const.fine_unloading_world_angle,
+            self.l1, self.l2, self.z0, self.nn3,
+            elbow_config=config_curr
+        )
+
+        final_unload_target = {
+            "name": f"Unload_L{layer}_I{index}",
+            "coords": [target_x, target_y, target_z, j4],
+            "config": config_curr,
+            "photo": 0
+        }
+
+        points.append(final_unload_target)
 
         # 执行运动
         self.execute_standard_motion_sequence(process_addr, points)
@@ -3740,7 +3824,6 @@ def main():
     #     logger.error("PLC 连接失败，线程退出")
     #     return  # 连接失败直接退出线程
 
-
     target_mat_coord = control_obj.transform_tool_coord(camera_coord, align_camera=1, joint_valid=False)
     print(f"target_mat_coord is: {target_mat_coord}")
     mat_x, mat_y, mat_z, mat_r = target_mat_coord
@@ -3788,6 +3871,11 @@ def main():
         print(f"目标点逆解失败")
     else:
         print(f"目标点可达: {ik}")
+
+    control_obj.load_vision_file()
+    co = control_obj.get_vision_data_full(0x4008c, 2)
+    print(co)
+
 
 if __name__ == "__main__":
     main()
