@@ -47,8 +47,9 @@ class RGBDDetector:
         self.depth_invalid = 0
         self.median_blur_kernel = 3
         self.gaussian_sigma = 1.2
-        self.sort_rule = SortRule.SORT_BY_Y_DESC
-
+        self.end_sort_rule = SortRule.SORT_BY_X_ASC  # 料头排序规则，默认从左到右
+        self.feed_sort_rule = SortRule.SORT_BY_Y_DESC  # 上料料排序规则，默认从上到下
+        self.unload_sort_rule = SortRule.SORT_BY_Y_ASC  # 下料排序规则，默认从上到下
         self.debug_mode = False
 
         # =====================                        
@@ -62,7 +63,7 @@ class RGBDDetector:
         self.product_height = 100
         self.product_width = 120
         self.interval_height = 20
-        self.feed_depth_start = 340
+        self.product_start_height = 340
         # self.tray_start_height = 1000
         self.product_count_per_layer = 8
 
@@ -104,7 +105,9 @@ class RGBDDetector:
         self.feed_offset_x = 0
         self.feed_offset_y = 0
         self.feed_offset_z = 0
+        self.feed_use_rgb = True
 
+        # ===================== 
         # 2. 物料缓存台ROI + 深度范围
         self.material_roi_x = 0
         self.material_roi_y = 0
@@ -113,6 +116,7 @@ class RGBDDetector:
         self.material_depth_min = 100  # 物料存在的最小深度
         self.material_depth_max = 500  # 物料存在的最大深度
 
+        # ===================== 
         # 3. YOLO铁屑检测ROI
         self.yolo_roi_x = 0
         self.yolo_roi_y = 0
@@ -138,7 +142,7 @@ class RGBDDetector:
         self.unload_roi_w = 640             # 下料区域ROI 宽度
         self.unload_roi_h = 480             # 下料区域ROI 高度
         self.unload_layer_count = 3         # 下料层数
-        self.unload_layer_height = 50       # 层高（mm）
+        self.unload_layer_thickness= 50       # 层高（mm）
         self.unload_item_count_per_layer = 5# 每层放置产品数量
         self.unload_item_interval = 80      # 产品间隔（像素/物理尺寸，根据标定转换）
         self.unload_item_width = 600        # 产品宽度（像素）
@@ -260,7 +264,9 @@ class RGBDDetector:
             self.camera_cy = cfg.get("camera_cy", 240.0)
 
             # 排序
-            self.sort_rule = cfg.get("sort_rule", 0)
+            self.end_sort_rule = cfg.get("end_sort_rule", SortRule.SORT_BY_X_ASC)
+            self.feed_sort_rule = cfg.get("feed_sort_rule", SortRule.SORT_BY_Y_DESC)
+            self.unload_sort_rule  = cfg.get("unload_sort_rule ", SortRule.SORT_BY_Y_ASC)
 
             # 图像预处理参数
             self.depth_invalid = cfg.get("depth_invalid", 0)
@@ -318,6 +324,7 @@ class RGBDDetector:
             self.feed_offset_x = cfg.get("feed_offset_x", 0)
             self.feed_offset_y = cfg.get("feed_offset_y", 0)
             self.feed_offset_z = cfg.get("feed_offset_z", 0)
+            self.feed_use_rgb = cfg.get("feed_use_rgb", 1)
             
             # 模板匹配算法，备用
             self.template_type = cfg.get("template_type", "")
@@ -359,13 +366,18 @@ class RGBDDetector:
             self.unload_roi_h = cfg.get("unload_roi_h", 480)
             
             # 下料算法参数
-            self.unload_layer_count = cfg.get("unload_layer_count", 3)
-            self.unload_layer_height = cfg.get("unload_layer_height", 50)
+            self.unload_tray_depth = cfg.get("unload_tray_depth", 1360)
+            self.unload_start_x = cfg.get("unload_start_x", 50)
+            self.unload_start_y = cfg.get("unload_start_y", 100)
+            self.unload_item_width = cfg.get("unload_item_width", 100)
+            self.unload_item_height = cfg.get("unload_item_height", 100)
+
+            self.unload_item_interval = cfg.get("unlunload_item_intervaload_start_x", 25)
+            self.unload_layer_thickness= cfg.get("unload_layer_depth", 100)
             self.unload_item_count_per_layer = cfg.get("unload_item_count_per_layer", 5)
-            self.unload_item_interval = cfg.get("unload_item_interval", 80)
-            self.unload_item_width = cfg.get("unload_item_width", 600)
-            self.unload_item_height = cfg.get("unload_item_height", 60)
-            self.unload_depth_threshold = cfg.get("unload_depth_threshold", 20)
+            self.unload_layer_count = cfg.get("unload_layer_count", 6)
+            self.unload_depth_threshold = cfg.get("unload_depth_threshold", 15)
+            self.unload_sort_rule = cfg.get("unload_sort_rule", 1)
 
             # ===================== 
             self.config_loaded = True
@@ -391,11 +403,11 @@ class RGBDDetector:
         top_pts = pts_sorted_by_y[:2]
         bottom_pts = pts_sorted_by_y[-2:]
 
-        if self.sort_rule == SortRule.SORT_BY_Y_ASC:
+        if self.feed_sort_rule == SortRule.SORT_BY_Y_ASC:
             cx = int((top_pts[0][0] + top_pts[1][0]) / 2)
             cy = int((top_pts[0][1] + top_pts[1][1]) / 2)
             return (cx, cy)
-        elif self.sort_rule == SortRule.SORT_BY_Y_DESC:
+        elif self.feed_sort_rule == SortRule.SORT_BY_Y_DESC:
             cx = int((bottom_pts[0][0] + bottom_pts[1][0]) / 2)
             cy = int((bottom_pts[0][1] + bottom_pts[1][1]) / 2)
             return (cx, cy)
@@ -414,10 +426,7 @@ class RGBDDetector:
             regions.sort(key=lambda x: x["pixel_center"][0], reverse=True)
         elif sort_rule == SortRule.SORT_BY_X_ASC:
             regions.sort(key=lambda x: x["pixel_center"][0])
-        elif sort_rule == SortRule.SORT_BY_AREA_DESC:
-            regions.sort(key=lambda x: x["area"], reverse=True)
-        elif sort_rule == SortRule.SORT_BY_DEPTH_ASC:
-            regions.sort(key=lambda x: x["avg_depth"])
+
         for i in range(len(regions)):
             regions[i]["region_id"] = i + 1 # 固定ID=1，因为永远只有1个结果
 
@@ -768,7 +777,7 @@ class RGBDDetector:
                     if abs(x_const - (x1_other + x2_other) / 2) <= max_extension_gap:
                         merged_group.append(other_line)
                         used_indices.add(j)
-            
+                
             # 合并组内的所有线段
             if merged_group:
                 merged_line = self._merge_line_group_extended(merged_group)
@@ -899,7 +908,7 @@ class RGBDDetector:
             x_int, y_int = int(x), int(y)
             
             # 根据排序规则确定搜索方向
-            if self.sort_rule == SortRule.SORT_BY_Y_ASC: #升序
+            if self.feed_sort_rule == SortRule.SORT_BY_Y_ASC: #升序
                 # 从上到下扫描 → 抓取顶部边缘
                 step = 1
             else: #降序
@@ -956,7 +965,7 @@ class RGBDDetector:
             x_int, y_int = int(x), int(y)
             
             # 根据排序规则确定采样方向
-            if self.sort_rule == SortRule.SORT_BY_Y_DESC:  # 从下到上扫描
+            if self.feed_sort_rule == SortRule.SORT_BY_Y_DESC:  # 从下到上扫描
                 # 采样直线上方（Y更小）和下方（Y更大）
                 sample_y_up = y_int - offset
                 sample_y_down = y_int + offset
@@ -1082,7 +1091,7 @@ class RGBDDetector:
         product_width = self.product_width # 产品宽度
         interval_height = self.interval_height # 间隔高度
         # feed_depth_start = self.feed_depth_start # 顶层产品初始高度
-        tray_depth = self.tray_start_height # 托盘深度
+        tray_depth = self.unload_tray_depth # 托盘深度
 
         # 计算ROI内的有效深度
         roi_valid_depths = roi_depth[(roi_depth != self.depth_invalid) & 
@@ -1332,6 +1341,7 @@ class RGBDDetector:
                 angle_threshold=5,
                 y_threshold=50
             )
+
             print(f"合并后线段数量: {len(horizontal_lines)}")
 
         # 构造region
@@ -1568,7 +1578,7 @@ class RGBDDetector:
             current_depth_min = layer_top_depth
             current_depth_max = layer_bottom_depth
             
-            print(f"当前层: {current_layer + 1}, 深度范围: {current_depth_min:.1f} - {current_depth_max:.1f}mm")
+            print(f"当前层: {current_layer}, 深度范围: {current_depth_min:.1f} - {current_depth_max:.1f}mm")
         
         # ===================== 加载模板 =====================
         template_depth = None
@@ -1662,7 +1672,7 @@ class RGBDDetector:
         template_edge_offset = getattr(self, 'template_edge_offset', template_h // 2)
         
         # 根据排序规则确定抓取边缘
-        if self.sort_rule == SortRule.SORT_BY_Y_ASC:
+        if self.feed_sort_rule == SortRule.SORT_BY_Y_ASC:
             # 从上到下：抓取顶部边缘
             edge_y = match_y + template_edge_offset
         else:
@@ -1695,7 +1705,7 @@ class RGBDDetector:
         # ===================== 构造region =====================
         for i, (mx, my, score) in enumerate(matches[:max_matches]):
             # 计算抓取边缘
-            if self.sort_rule == SortRule.SORT_BY_Y_ASC:
+            if self.feed_sort_rule == SortRule.SORT_BY_Y_ASC:
                 edge_y = my + template_edge_offset
             else:
                 edge_y = my + template_h - template_edge_offset
@@ -1743,7 +1753,7 @@ class RGBDDetector:
             regions.append(region)
         
         # 排序
-        self._sort_regions(regions, self.sort_rule)
+        self._sort_regions(regions, self.feed_sort_rule)
         
         print(f"模板匹配成功，找到 {len(regions)} 个目标")
         
@@ -1948,7 +1958,7 @@ class RGBDDetector:
                 current_layer = min(current_layer, max_layer)
             
             print(f"深度偏移: {depth_offset:.1f}mm, 层厚度: {layer_thickness:.1f}mm")
-            print(f"当前层: 第{current_layer + 1}层 (层号: {current_layer})")
+            print(f"当前层: 第{current_layer}层 (层号: {current_layer})")
             
             # 计算当前层的深度范围
             layer_top_depth = start_height + current_layer * layer_thickness
@@ -2199,7 +2209,8 @@ class RGBDDetector:
         x += offset_x
         y += offset_y
         z += offset_z
-        
+   
+
         region = {
             "region_id": 0,
             "pixel_center": pixel_center,
@@ -2279,8 +2290,9 @@ class RGBDDetector:
         current_depth_max = self.feed_depth_max
 
         # 边缘检测
+        feed_use_rgb = getattr(self, 'feed_use_rgb', True)
         edges_combined, depth_normalized = self._detect_edges_general(
-            roi_depth, rgb_roi, current_depth_min, current_depth_max, self.feed_depth_thresh, use_rgb=True
+            roi_depth, rgb_roi, current_depth_min, current_depth_max, self.feed_depth_thresh, use_rgb=feed_use_rgb
         )
         
         # 显示边缘图（调试用）
@@ -2330,7 +2342,7 @@ class RGBDDetector:
                 regions.append(region)
         
         # 排序
-        self._sort_regions(regions, self.sort_rule)
+        self._sort_regions(regions, self.feed_sort_rule)
         
         # 打印排序结果
         for i, r in enumerate(regions):
@@ -2577,7 +2589,7 @@ class RGBDDetector:
         # 打印合并详情
         for i, line in enumerate(merged_lines):
             if line.get('merged_count', 1) > 1:
-                print(f"  线段 {i+1}: 合并了 {line['merged_count']} 个轮廓, X范围 [{line['points'][0][0]}, {line['points'][1][0]}]")
+                print(f"  线段 {i}: 合并了 {line['merged_count']} 个轮廓, X范围 [{line['points'][0][0]}, {line['points'][1][0]}]")
         
         return merged_lines
 
@@ -2619,7 +2631,8 @@ class RGBDDetector:
         )
         
         # 提取RGB ROI
-        if rgb_img is not None:
+        feed_use_rgb = getattr(self, 'feed_use_rgb', True)
+        if feed_use_rgb == True and rgb_img is not None:
             rgb_roi = rgb_img[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
         else:
             rgb_roi = None
@@ -2736,7 +2749,7 @@ class RGBDDetector:
             regions.append(region)
         
         # 排序
-        self._sort_regions(regions, SortRule.SORT_BY_X_ASC)
+        self._sort_regions(regions, self.end_sort_rule)
         
         # 根据产品宽度过滤（去重）
         regions_filter = []
@@ -2761,7 +2774,7 @@ class RGBDDetector:
         # 打印结果
         print(f"端面检测完成，找到 {len(regions_filter)} 个有效端面")
         for i, r in enumerate(regions_filter):
-            print(f'  端面 {i+1}: y={r["line_y_avg"]:.1f}, depth={r["avg_depth"]:.1f}mm')
+            print(f'  端面 {i}: y={r["line_y_avg"]:.1f}, depth={r["avg_depth"]:.1f}mm')
         
         # 显示调试图像
         if True:
@@ -2887,7 +2900,7 @@ class RGBDDetector:
                 regions.append(region)
         
         # 排序
-        self._sort_regions(regions, self.sort_rule)
+        self._sort_regions(regions, self.feed_sort_rule)
         
         # 打印排序结果
         for i, r in enumerate(regions):
@@ -2943,214 +2956,188 @@ class RGBDDetector:
         
         return exists_flag, coords
 
-    # ===================== 【修改后✅核心】下料算法：每层X1个，沿Y竖直并排 =====================
-    # ===================== 【简化优化✅核心】下料算法：单层深度比较判断 =====================
     def _unload_check(self, depth_img):
-        """下料算法：基于单层深度比较判断产品放置状态"""
+        """
+        下料算法：基于深度比较判断产品放置状态
+        
+        逻辑：
+            1. 计算所有理论位置的世界坐标(X,Y,Z)和像素区域
+            2. 从深度图中判断每个位置是否有产品
+            3. 找出已放置的位置，确定当前进度
+            4. 根据排序规则，给出下一个空位
+            5. 全空时，从最底层开始放置
+        
+        排列方式：竖直方向（Y轴）从上到下或从下到上排列
+        层定义：第0层是最上层（离相机最近），第N层是最下层（离相机最远）
+        """
         exists_flag = DetectStatus.NOTHING
         coords = [0.0, 0.0, 0.0, 0.0]
+        target_layer = 0
+        target_position = 0
         
         # 1. 预处理深度图
         depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
         depth_filtered = cv2.GaussianBlur(depth_filtered, (3,3), self.gaussian_sigma)
         
-        # 2. 限定下料ROI范围
-        h, w = depth_img.shape
+        h, w = depth_filtered.shape
         roi_x_start = max(self.unload_roi_x, 0)
         roi_x_end = min(self.unload_roi_x + self.unload_roi_w, w)
         roi_y_start = max(self.unload_roi_y, 0)
         roi_y_end = min(self.unload_roi_y + self.unload_roi_h, h)
+        # 裁剪 ROI 区域
+        depth_roi = depth_filtered[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
+
+        # 2. 获取下料配置参数（单位：mm）
+        start_x_mm = getattr(self, 'unload_start_x', 0.0)           # X坐标固定
+        start_y_mm = getattr(self, 'unload_start_y', 0.0)           # 第一个产品的Y坐标
+        item_width_mm = getattr(self, 'unload_item_width', 50.0)    # 产品宽度（X方向）
+        item_height_mm = getattr(self, 'unload_item_height', 30.0)  # 产品高度（Y方向）
+        item_interval_mm = getattr(self, 'unload_item_interval', 10.0)  # Y方向间隔
+        item_count = self.unload_item_count_per_layer                # 每层产品数量
+        layer_count = self.unload_layer_count                        # 总层数
+        layer_thickness_mm = self.unload_layer_thickness               # 层厚（Z方向）
         
-        # 3. 生成单层理论产品区域坐标（所有层坐标都一样）
-        item_regions = []
-        region_depths = []  # 存储每个区域的平均深度
+        # 托盘深度（最底层深度）
+        tray_depth_mm = getattr(self, 'unload_tray_depth', 1000)
         
-        # 层号固定为0（只考虑一层）
-        layer_idx = 0
-        layer_depth = self.feed_depth_min  # 第一层基准深度
+        # 计算各层理论深度：第0层最浅（最上层），第N层最深（最下层）
+        top_layer_depth_mm = tray_depth_mm - (layer_count - 1) * layer_thickness_mm
         
-        # 生成该层所有产品的区域
-        for item_idx in range(self.unload_item_count_per_layer):
-            # 计算产品区域坐标
-            left = roi_x_start
-            top = roi_y_start + item_idx * (self.unload_item_height + self.unload_item_interval)
-            right = left + self.unload_item_width
-            bottom = top + self.unload_item_height
+        print(f"下料参数: 总层数={layer_count}, 层厚={layer_thickness_mm}mm")
+        print(f"托盘深度={tray_depth_mm}mm, 最上层深度={top_layer_depth_mm}mm")
+        print(f"每层产品数量={item_count}, 沿Y方向排列")
+        
+        # 3. 世界坐标转像素坐标的函数
+        def world_to_pixel(x_mm, y_mm, z_mm):
+            if z_mm <= 0:
+                return (0, 0)
+            u = int(self.camera_fx * x_mm / z_mm + self.camera_cx)
+            v = int(self.camera_fy * y_mm / z_mm + self.camera_cy)
+            return (u, v)
+        
+        # 4. 生成所有理论位置并判断状态
+        all_positions = []  # 所有位置，按层和位置索引存储
+        
+        print("\n--- 计算所有位置并分析状态 ---")
+        
+        for layer_idx in range(layer_count):
+            # 该层的理论深度
+            layer_z_mm = top_layer_depth_mm + layer_idx * layer_thickness_mm
+            print(f"\n第{layer_idx}层 (深度={layer_z_mm:.1f}mm):")
             
-            # 确保在ROI范围内
-            left = max(left, roi_x_start)
-            top = max(top, roi_y_start)
-            right = min(right, roi_x_end)
-            bottom = min(bottom, roi_y_end)
-            
-            if right <= left or bottom <= top:
-                continue  # 无效区域
+            for pos_idx in range(item_count):
+                # 产品Y坐标
+                item_y_mm = start_y_mm + pos_idx * (item_height_mm + item_interval_mm)
                 
-            # 提取产品区域的深度值
-            region_depth = depth_filtered[top:bottom, left:right]
-            
-            # 过滤无效深度值
-            valid_mask = (region_depth != self.depth_invalid) & \
-                        (region_depth >= self.feed_depth_min) & \
-                        (region_depth <= self.feed_depth_max)
-            valid_depths = region_depth[valid_mask]
-            
-            # 计算平均深度
-            if len(valid_depths) > 0:
-                mean_depth = np.mean(valid_depths)
-                valid_ratio = len(valid_depths) / region_depth.size
-            else:
-                mean_depth = layer_depth  # 默认值
-                valid_ratio = 0
-            
-            # 存储区域信息
-            region_info = {
-                "layer_idx": layer_idx,
-                "item_idx": item_idx,
-                "left": left,
-                "top": top,
-                "right": right,
-                "bottom": bottom,
-                "center_x": (left + right) // 2,
-                "center_y": (top + bottom) // 2,
-                "target_depth": layer_depth,
-                "mean_depth": mean_depth,
-                "valid_ratio": valid_ratio,
-                "is_valid": valid_ratio > 0.3  # 有效像素比例阈值
-            }
-            
-            item_regions.append(region_info)
-            if region_info["is_valid"]:
-                region_depths.append(mean_depth)
-        
-        # 4. 判断放置状态
-        empty_regions = []
-        
-        if len(region_depths) > 0:
-            # 计算所有有效区域的平均深度和标准差
-            all_mean_depth = np.mean(region_depths)
-            all_std_depth = np.std(region_depths) if len(region_depths) > 1 else 0
-            
-            print(f"深度统计: 平均值={all_mean_depth:.1f}, 标准差={all_std_depth:.1f}")
-            
-            # 判断规则：
-            # 1. 如果所有区域深度标准差很小（< 阈值），说明深度一致
-            # 2. 如果某个区域深度明显大于平均深度，说明该区域为空
-            
-            depth_std_threshold = self.unload_depth_threshold # 15  # 深度标准差阈值
-            
-            if all_std_depth < depth_std_threshold:
-                # 情况1: 所有区域深度差不多
-                print("状态: 所有区域深度一致")
+                # 计算产品四个角点的像素坐标
+                corners_world = [
+                    (start_x_mm, item_y_mm, layer_z_mm),
+                    (start_x_mm + item_width_mm, item_y_mm, layer_z_mm),
+                    (start_x_mm + item_width_mm, item_y_mm + item_height_mm, layer_z_mm),
+                    (start_x_mm, item_y_mm + item_height_mm, layer_z_mm)
+                ]
+                corners_pixel = [world_to_pixel(x, y, z) for x, y, z in corners_world]
                 
-                # 判断是全部空还是全部有产品
-                if True: #all_mean_depth > layer_depth + 30:  # 深度明显大于基准，说明全部空
-                    print("结论: 全部区域为空")
-                    # 所有区域都为空，根据排序规则选择第一个
-                    empty_regions = [r for r in item_regions if r["is_valid"]]
-                '''
-                else:
-                    print("结论: 全部区域已放置产品")
-                    # 如果全部已放置，根据排序规则返回最上面或最下面的边缘
-                    if self.sort_rule == SortRule.SORT_BY_Y_ASC:
-                        # 从上到下：选择最上面的区域
-                        item_regions.sort(key=lambda r: r["top"])
-                        target_region = item_regions[0]
-                        # 使用顶部边缘中心
-                        edge_x = target_region["center_x"]
-                        edge_y = target_region["top"]
-                        edge_center = (edge_x, edge_y)
-                    elif self.sort_rule == SortRule.SORT_BY_Y_DESC:
-                        # 从下到上：选择最下面的区域
-                        item_regions.sort(key=lambda r: r["bottom"], reverse=True)
-                        target_region = item_regions[0]
-                        # 使用底部边缘中心
-                        edge_x = target_region["center_x"]
-                        edge_y = target_region["bottom"]
-                        edge_center = (edge_x, edge_y)
-                    else:
-                        # 默认使用第一个区域的中心
-                        target_region = item_regions[0]
-                        edge_center = (target_region["center_x"], target_region["center_y"])
-                    
-                    # 计算世界坐标
-                    world_xyz = self._pixel2world(edge_center, target_region["mean_depth"])
-                    x, y, z = world_xyz
-                    r = 0.0
-                    
-                    # 叠加工具坐标偏移
-                    x += self.tool_coord_x
-                    y += self.tool_coord_y
-                    z += self.tool_coord_z
-                    r += self.tool_coord_r
-                    
-                    coords = [x, y, z, r]
-                    exists_flag = DetectStatus.EXIST
-                    
-                    print(f"返回坐标: 区域{target_region['item_idx']}, 边缘({edge_x}, {edge_y})")
-                    return exists_flag, coords
-                '''
-            else:
-                # 情况2: 深度有差异，找出空区域
-                print("状态: 区域深度有差异")
+                u_list = [p[0] for p in corners_pixel]
+                v_list = [p[1] for p in corners_pixel]
                 
-                # 空区域判断：深度比平均深度大一定阈值
-                depth_diff_threshold = depth_std_threshold # 25  # 深度差异阈值
+                left = max(0, min(u_list))
+                right = min(depth_img.shape[1], max(u_list))
+                top = max(0, min(v_list))
+                bottom = min(depth_img.shape[0], max(v_list))
+                roi_left = max(left - roi_x_start, 0)
+                roi_right = min(right - roi_x_start, depth_roi.shape[1])
+                roi_top = max(top - roi_y_start, 0)
+                roi_bottom = min(bottom - roi_y_start, depth_roi.shape[0])
+
+                # 判断该位置是否有产品
+                has_product = False
+                actual_depth = None
                 
-                for region in item_regions:
-                    if not region["is_valid"]:
-                        # 无效区域视为空
-                        empty_regions.append(region)
-                        continue
+                if right > left and bottom > top:
+                    # 从裁剪后的 ROI 深度图中提取该区域的深度值
+                    region_depth = depth_roi[roi_top:roi_bottom, roi_left:roi_right]
+                    valid_mask = (region_depth != self.depth_invalid) & \
+                                (region_depth <= self.unload_tray_depth)
+                    valid_depths = region_depth[valid_mask]
+                    
+                    if len(valid_depths) > 0:
+                        actual_depth = np.median(valid_depths)
+                        valid_ratio = len(valid_depths) / region_depth.size
                         
-                    depth_diff = region["mean_depth"] - all_mean_depth
-                    if depth_diff > depth_diff_threshold:
-                        # 深度明显大于平均，说明该区域为空
-                        empty_regions.append(region)
-                        print(f"  区域{region['item_idx']}: 深度={region['mean_depth']:.1f}, "
-                            f"差异={depth_diff:.1f} > 阈值, 判断为空")
+                        # 判断是否有产品：实际深度接近理论深度
+                        # depth_diff = abs(actual_depth - layer_z_mm)
+                        # if depth_diff <= depth_tolerance and valid_ratio > 0.3:
+                        depth_diff = actual_depth - layer_z_mm
+                        if depth_diff < 0 and depth_diff > -layer_thickness_mm and valid_ratio > 0.3:
+                            has_product = True
+                            print(f"  P{pos_idx}: 有产品 (实际深度={actual_depth:.1f}mm, 理论={layer_z_mm:.1f}mm)")
+                        else:
+                            print(f"  P{pos_idx}: 空位 (实际深度={actual_depth:.1f}mm, 理论={layer_z_mm:.1f}mm, 差异={depth_diff:.1f}mm)")
+                    else:
+                        print(f"  P{pos_idx}: 空位 (无有效深度数据)")
+                else:
+                    print(f"  P{pos_idx}: 空位 (像素区域无效)")
+                
+                position_info = {
+                    "layer_idx": layer_idx,
+                    "position_idx": pos_idx,
+                    "world_x": start_x_mm + item_width_mm / 2,
+                    "world_y": item_y_mm,                       # 上边缘Y坐标
+                    "world_z": layer_z_mm,
+                    "theoretical_depth": layer_z_mm,
+                    "actual_depth": actual_depth,
+                    "has_product": has_product,
+                    "pixel_top": top,
+                    "pixel_center_x": (left + right) // 2 if right > left else 0,
+                }
+                all_positions.append(position_info)
         
+        # 5. 找出所有空位
+        empty_positions = [p for p in all_positions if not p["has_product"]]
+        
+        print(f"\n共找到 {len(empty_positions)} 个空位")
+        
+        if not empty_positions:
+            print("未找到空位，下料区域已满")
+            return exists_flag, coords, target_layer, target_position
+        
+        exists_flag = DetectStatus.EXIST
+
+        unload_sort_rule = getattr(self, 'unload_sort_rule', self.unload_sort_rule)
+        # 6. 排序：先按层从大到小（最底层优先），再按同一层内的排序规则
+        if unload_sort_rule == SortRule.SORT_BY_Y_ASC:
+            # 从上到下：先按层从大到小，同一层内按Y升序
+            empty_positions.sort(key=lambda p: (-p["layer_idx"], p["world_y"]))
+            print("\n排序规则: 优先最底层，同一层内从上到下(Y升序)")
+        elif unload_sort_rule == SortRule.SORT_BY_Y_DESC:
+            # 从下到上：先按层从大到小，同一层内按Y降序
+            empty_positions.sort(key=lambda p: (-p["layer_idx"], -p["world_y"]))
+            print("\n排序规则: 优先最底层，同一层内从下到上(Y降序)")
         else:
-            # 没有有效深度数据，所有区域都视为空
-            print("状态: 无有效深度数据，所有区域视为空")
-            empty_regions = item_regions
+            # 默认：先按层从大到小，同一层内按位置序号
+            empty_positions.sort(key=lambda p: (-p["layer_idx"], p["position_idx"]))
+            print("\n排序规则: 优先最底层，同一层内按位置序号")
+            
+        # 打印排序后的空位顺序
+        print("\n空位排序结果:")
+        for i, p in enumerate(empty_positions):
+            print(f"  {i}: 层{p['layer_idx']}, 位置{p['position_idx']}, Y={p['world_y']:.1f}mm")
         
-        # 5. 如果有空区域，根据排序规则选择第一个空位置
-        if empty_regions:
-            exists_flag = DetectStatus.EXIST
+        # 选择第一个空位
+        target = empty_positions[0]
+        target_layer = target["layer_idx"]
+        target_position = target["position_idx"]
+        
+        # 8. 输出结果
+        if target:
+            # 抓取产品上边缘
+            edge_y_world = target["world_y"]
             
-            # 根据排序规则对空区域排序
-            if self.sort_rule == SortRule.SORT_BY_Y_ASC:
-                # 从上到下：选择Y坐标最小的空位置（最上面）
-                empty_regions.sort(key=lambda r: r["top"])
-                target_region = empty_regions[0]
-                # 使用顶部边缘中心
-                edge_x = target_region["center_x"]
-                edge_y = target_region["top"]
-                edge_center = (edge_x, edge_y)
-            elif self.sort_rule == SortRule.SORT_BY_Y_DESC:
-                # 从下到上：选择Y坐标最大的空位置（最下面）
-                empty_regions.sort(key=lambda r: r["bottom"], reverse=True)
-                target_region = empty_regions[0]
-                # 使用底部边缘中心
-                edge_x = target_region["center_x"]
-                edge_y = target_region["bottom"]
-                edge_center = (edge_x, edge_y)
-            else:
-                # 默认按物品索引排序
-                empty_regions.sort(key=lambda r: r["item_idx"])
-                target_region = empty_regions[0]
-                edge_center = (target_region["center_x"], target_region["center_y"])
+            print(f"\n选择目标: 层{target_layer} (0=最上层, {layer_count-1}=最下层), 位置{target_position}")
+            print(f"  抓取上边缘: X={target['world_x']:.1f}mm, Y={edge_y_world:.1f}mm, Z={target['theoretical_depth']:.1f}mm")
             
-            print(f"选择空区域: 区域{target_region['item_idx']}, "
-                f"深度={target_region['mean_depth']:.1f}, "
-                f"边缘({edge_x}, {edge_y})")
-            
-            # 计算世界坐标
-            # 空位置使用目标深度，而不是实际深度
-            target_depth = target_region["target_depth"]
-            world_xyz = self._pixel2world(edge_center, target_depth)
-            x, y, z = world_xyz
+            x, y, z = target["world_x"], edge_y_world, target["theoretical_depth"]
             r = 0.0
             
             # 叠加工具坐标偏移
@@ -3160,12 +3147,16 @@ class RGBDDetector:
             r += self.tool_coord_r
             
             coords = [x, y, z, r]
+            
+            # 打印目标层所有位置的状态
+            print(f"\n目标层(层{target_layer})位置状态:")
+            for p in all_positions:
+                if p["layer_idx"] == target_layer:
+                    marker = "->" if p["position_idx"] == target_position else "  "
+                    status = "有产品" if p["has_product"] else "空位"
+                    print(f"  {marker} P{p['position_idx']}: {status}")
         
-        else:
-            exists_flag = DetectStatus.NOTHING
-            print("状态: 未找到空区域")
-        
-        return exists_flag, coords
+        return exists_flag, coords, target_layer, target_position
 
     # ===================== 【对外接口2 - 检测接口】核心 =====================
     def detect(self, ptype, rgb_img, depth_img):
@@ -3234,8 +3225,23 @@ class RGBDDetector:
                     coords = [x, y, z, r]
                     
                 print(f"返回 {len(regions)} 个区域")
+            # elif ptype == PType.UNLOAD_CHECK: # 下料
+            #     exists_flag, coords = self._unload_check(depth_img)
             elif ptype == PType.UNLOAD_CHECK: # 下料
-                exists_flag, coords = self._unload_check(depth_img)
+                exists_flag, coords, layer_idx, position_idx = self._unload_check(depth_img)
+                # 将层数和位置序号存入返回结果
+                result_data = {
+                    "ptype": ptype,
+                    "coords": coords,
+                    "exists": exists_flag,
+                    "layer": layer_idx,      # 新增：目标层号
+                    "position": position_idx  # 新增：该层中的位置序号
+                }
+                return {
+                    "code": 0,
+                    "result": result_data,
+                    "err_msg": ""
+                }
 
             return {
                 "code":0,
@@ -3360,23 +3366,28 @@ class RGBDDetector:
         
         return draw_img
 
-    # ===================== 【核心优化 ✅ 重点】叠加 YOLO铁屑框+置信度+旋转矩形框+中心点+ROI框+所有信息 =====================
+    # ===================== 【修改后】绘制函数 - 支持显示层号和位置序号 =====================
     def draw_result_with_rotated_box(self, rgb, detect_res):
         draw_img = rgb.copy()
-        # 检测异常的情况 加双重判断
+        
+        # 检测异常的情况
         if detect_res["code"] != 0 or not detect_res["result"]:
             cv2.putText(draw_img, "DETECT ERR", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-            if detect_res["err_msg"]:
-                cv2.putText(draw_img, detect_res["err_msg"][:15], (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 1)
+            if detect_res.get("err_msg"):
+                cv2.putText(draw_img, detect_res["err_msg"][:30], (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 1)
             return draw_img
         
         res = detect_res["result"]
         ptype = res["ptype"]
         coords = res["coords"]
         exists_flag = res["exists"]
-        x,y,z,r = coords
+        x, y, z, r = coords
+        
+        # 获取新增的层号和位置序号（兼容旧版本，如果没有则设为-1）
+        layer_idx = res.get("layer", -1)
+        position_idx = res.get("position", -1)
 
-        # 1. 绘制原有所有信息：状态、类型、坐标
+        # 1. 绘制状态信息
         status_text = "EXIST" if exists_flag == DetectStatus.EXIST else "NOTHING"
         status_color = (0,255,0) if exists_flag == DetectStatus.EXIST else (0,0,255)
         cv2.putText(draw_img, f"STATUS: {status_text}", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
@@ -3388,29 +3399,39 @@ class RGBDDetector:
         # 绘制坐标信息
         coord_text = f"X:{x:.1f} Y:{y:.1f} Z:{z:.1f} R:{r:.1f}"
         cv2.putText(draw_img, coord_text, (20,110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-
+        
+        # ==================== 新增：显示层号和位置序号 ====================
+        if ptype == PType.UNLOAD_CHECK and layer_idx >= 0 and position_idx >= 0:
+            # 下料检测显示目标层和位置
+            layer_pos_text = f"Target: Layer {layer_idx} / Position {position_idx}"
+            cv2.putText(draw_img, layer_pos_text, (20,150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
+        elif ptype == PType.FEED_CHECK and layer_idx >= 0:
+            # 上料检测显示层号（如果有）
+            layer_text = f"Layer: {layer_idx}"
+            cv2.putText(draw_img, layer_text, (20,150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
+        
         # 显示检测到的区域数量
         if len(self.detected_regions) > 0:
-            cv2.putText(draw_img, f"Regions: {len(self.detected_regions)}", (20,150), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,0), 2)
+            y_offset = 190 if (ptype == PType.UNLOAD_CHECK and layer_idx >= 0) else 150
+            cv2.putText(draw_img, f"Regions: {len(self.detected_regions)}", (20, y_offset), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,0), 2)
 
         # 2. 绘制对应ROI框
         roi_info = {
             PType.MATERIAL_CHECK: ("Material ROI", (self.material_roi_x, self.material_roi_y), 
-                                  (self.material_roi_x+self.material_roi_w, self.material_roi_y+self.material_roi_h), (0,255,0)),
+                                (self.material_roi_x+self.material_roi_w, self.material_roi_y+self.material_roi_h), (0,255,0)),
             PType.FEED_CHECK: ("Feed ROI", (self.feed_roi_x, self.feed_roi_y), 
-                              (self.feed_roi_x+self.feed_roi_w, self.feed_roi_y+self.feed_roi_h), (255,0,0)),
+                            (self.feed_roi_x+self.feed_roi_w, self.feed_roi_y+self.feed_roi_h), (255,0,0)),
             PType.UNLOAD_CHECK: ("Unload ROI", (self.unload_roi_x, self.unload_roi_y), 
                                 (self.unload_roi_x+self.unload_roi_w, self.unload_roi_y+self.unload_roi_h), (0,255,255)),
             PType.IRON_CHIP_CHECK: ("YOLO ROI", (self.yolo_roi_x, self.yolo_roi_y), 
-                                   (self.yolo_roi_x+self.yolo_roi_w, self.yolo_roi_y+self.yolo_roi_h), (255,0,255))
+                                (self.yolo_roi_x+self.yolo_roi_w, self.yolo_roi_y+self.yolo_roi_h), (255,0,255))
         }
         if ptype in roi_info:
             roi_name, roi_start, roi_end, roi_color = roi_info[ptype]
-            # 绘制ROI框
             cv2.rectangle(draw_img, roi_start, roi_end, roi_color, 2)
             cv2.putText(draw_img, roi_name, (roi_start[0]+5, roi_start[1]+20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, roi_color, 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, roi_color, 2)
 
         # 3. 绘制所有检测到的区域（上料检测）
         if (ptype == PType.FEED_CHECK or ptype == PType.FEED_END_CHECK) and len(self.detected_regions) > 0:
@@ -3431,35 +3452,25 @@ class RGBDDetector:
                     cv2.circle(draw_img, (x1, y1), 4, (255,255,255), -1)
                     cv2.circle(draw_img, (x2, y2), 4, (255,255,255), -1)
                 
-                # 绘制产品矩形框（如果有外接矩形）
-                if "bounding_rect" in region:
-                    x, y, w, h = region["bounding_rect"]
-                    cv2.rectangle(draw_img, (x, y), (x+w, y+h), color, 2)
-                
-                # 绘制抓取边缘线（高亮）
+                # 绘制抓取边缘线
                 edge_y = region.get("line_y_avg", 0)
                 if edge_y > 0:
                     line_x1 = region["pixel_center"][0] - self.product_width // 2
                     line_x2 = region["pixel_center"][0] + self.product_width // 2
                     cv2.line(draw_img, (line_x1, int(edge_y)), (line_x2, int(edge_y)), (0,255,255), 2)
                     cv2.putText(draw_img, "GRIP EDGE", (line_x1, int(edge_y)-10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
                 
                 # 标注区域序号和层信息
                 mid_x = region["pixel_center"][0]
                 mid_y = region["pixel_center"][1]
-                cv2.putText(draw_img, f"R{i+1}", (mid_x-15, mid_y-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                cv2.putText(draw_img, f"R{i}", (mid_x-15, mid_y-10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 
                 # 显示层信息
-                # layer = region.get("layer", 0)
-                # cv2.putText(draw_img, f"L{layer+1}", (mid_x-15, mid_y+15), 
-                #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-                
-                # 显示匹配分数（如果是模板匹配）
-                if "match_score" in region:
-                    cv2.putText(draw_img, f"Score:{region['match_score']:.2f}", 
-                               (mid_x-15, mid_y+30), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                layer = region.get("layer", 0)
+                cv2.putText(draw_img, f"L{layer}", (mid_x-15, mid_y+15), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
                 
                 # 绘制中心点
                 cx, cy = region["pixel_center"]
@@ -3468,71 +3479,134 @@ class RGBDDetector:
                 # 绘制深度信息
                 depth_text = f"D:{region['avg_depth']:.0f}mm"
                 cv2.putText(draw_img, depth_text, (cx+40, cy-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
             
-            # 特别标注主检测结果（根据配置的索引）
+            # 高亮主检测区域
             if len(self.detected_regions) > 0:
                 feed_edge_index = min(getattr(self, 'feed_edge_index', 0), len(self.detected_regions)-1)
                 main_region = self.detected_regions[feed_edge_index]
                 
-                # 高亮主检测区域
-                if "rotated_rect" in main_region and main_region["rotated_rect"] is not None:
-                    box = cv2.boxPoints(main_region["rotated_rect"])
-                    box = np.int32(box)
-                    cv2.drawContours(draw_img, [box], 0, (255,255,255), 3)
-                
                 if "line_points" in main_region:
                     (x1, y1), (x2, y2) = main_region["line_points"]
                     cv2.line(draw_img, (x1, y1), (x2, y2), (255,255,255), 2)
-                
-                cv2.putText(draw_img, "MAIN", (x1-10, y1-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+                    cv2.putText(draw_img, "MAIN", (x1-10, y1-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
-        # 4. 绘制YOLO铁屑检测框（仅铁屑检测）
+        # 4. 绘制下料区域的理论放置位置（增强版：显示层和位置序号）
+        if ptype == PType.UNLOAD_CHECK:
+            h, w = draw_img.shape[:2]
+            
+            # 获取下料配置参数（mm单位）
+            start_x_mm = getattr(self, 'unload_start_x', 0.0)
+            start_y_mm = getattr(self, 'unload_start_y', 0.0)
+            item_width_mm = getattr(self, 'unload_item_width', 50.0)
+            item_height_mm = getattr(self, 'unload_item_height', 30.0)
+            item_interval_mm = getattr(self, 'unload_item_interval', 10.0)
+            item_count = self.unload_item_count_per_layer
+            layer_count = self.unload_layer_count
+            layer_thickness_mm = self.unload_layer_thickness # 层厚（Z方向）
+            
+            # 托盘深度（最底层深度）
+            tray_depth_mm = getattr(self, 'unload_tray_depth', 1000)
+            # 计算最上层深度（第0层）
+            top_layer_depth_mm = tray_depth_mm - (layer_count - 1) * layer_thickness_mm
+            
+            # 世界坐标转像素坐标的函数
+            def world_to_pixel_display(x_mm, y_mm, z_mm):
+                if z_mm <= 0:
+                    return (0, 0)
+                u = int(self.camera_fx * x_mm / z_mm + self.camera_cx)
+                v = int(self.camera_fy * y_mm / z_mm + self.camera_cy)
+                return (u, v)
+            
+            # 绘制所有理论位置
+            layer_idx_target = layer_idx
+            for layer_idx in range(layer_count):
+                if layer_idx != layer_idx_target:
+                    continue
+                # 计算该层的深度（Z坐标）
+                layer_z_mm = top_layer_depth_mm + layer_idx * layer_thickness_mm
+                layer_start_y_mm = start_y_mm
+                
+                for pos_idx in range(item_count):
+                    # 计算产品区域的世界坐标
+                    item_x_mm = start_x_mm
+                    item_y_mm = layer_start_y_mm + pos_idx * (item_height_mm + item_interval_mm)
+                    item_z_mm = layer_z_mm
+                    
+                    # 计算四个角点的像素坐标
+                    corners = [
+                        (item_x_mm, item_y_mm, item_z_mm),
+                        (item_x_mm + item_width_mm, item_y_mm, item_z_mm),
+                        (item_x_mm + item_width_mm, item_y_mm + item_height_mm, item_z_mm),
+                        (item_x_mm, item_y_mm + item_height_mm, item_z_mm)
+                    ]
+                    pixel_corners = [world_to_pixel_display(x, y, z) for x, y, z in corners]
+                    
+                    # 获取边界
+                    u_list = [p[0] for p in pixel_corners]
+                    v_list = [p[1] for p in pixel_corners]
+                    left = max(0, min(u_list))
+                    right = min(w, max(u_list))
+                    top = max(0, min(v_list))
+                    bottom = min(h, max(v_list))
+                    
+                    if right <= left or bottom <= top:
+                        continue
+                    
+                    # 判断是否是目标位置
+                    is_target = (layer_idx == layer_idx_target and pos_idx == position_idx) if 'layer_idx_target' in dir() else False
+                    
+                    # 根据是否为目标选择不同颜色
+                    if is_target:
+                        box_color = (0, 0, 255)  # 红色高亮目标
+                        thickness = 3
+                    else:
+                        box_color = (255, 255, 0)  # 青色
+                        thickness = 1
+                    
+                    # 绘制位置框
+                    cv2.rectangle(draw_img, (left, top), (right, bottom), box_color, thickness)
+                    
+                    # 显示层号和位置序号
+                    label = f"L{layer_idx}P{pos_idx}"
+                    label_y = top - 5 if top > 20 else bottom + 15
+                    cv2.putText(draw_img, label, (left, label_y), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1)
+            
+            # 绘制目标抓取点（红色大圆点）
+            layer_idx = layer_idx_target # 前面被修改了
+            if exists_flag == DetectStatus.EXIST:
+                # 将世界坐标转换为像素坐标
+                target_pixel_x = int(self.camera_fx * x / z + self.camera_cx)
+                target_pixel_y = int(self.camera_fy * y / z + self.camera_cy)
+                
+                # 确保在图像范围内
+                if 0 <= target_pixel_x < draw_img.shape[1] and 0 <= target_pixel_y < draw_img.shape[0]:
+                    cv2.circle(draw_img, (target_pixel_x, target_pixel_y), 10, (0, 0, 255), -1)
+                    cv2.circle(draw_img, (target_pixel_x, target_pixel_y), 12, (255, 255, 255), 2)
+                    cv2.putText(draw_img, f"TARGET L{layer_idx}P{position_idx}", 
+                            (target_pixel_x + 15, target_pixel_y - 5), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+        # 5. 绘制YOLO铁屑检测框
         if ptype == PType.IRON_CHIP_CHECK and len(self.detect_iron_chips) > 0:
             for (x1, y1, w, h, conf) in self.detect_iron_chips:
                 cv2.rectangle(draw_img, (x1, y1), (x1+w, y1+h), (0,0,255), 2)
                 cv2.putText(draw_img, f"Chip {conf}", (x1, y1-5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 2)
-
-        # 5. 绘制下料区域的理论放置位置（仅下料检测）
-        if ptype == PType.UNLOAD_CHECK:
-            h, w = draw_img.shape[:2]
-            roi_x_start = max(self.unload_roi_x, 0)
-            roi_x_end = min(self.unload_roi_x + self.unload_roi_w, w)
-            roi_y_start = max(self.unload_roi_y, 0)
-            
-            # 计算每层的理论坐标
-            for layer_idx in range(self.unload_layer_count):
-                start_x = roi_x_start
-                start_y = roi_y_start
-                
-                for item_idx in range(self.unload_item_count_per_layer):
-                    item_x = start_x
-                    item_y = start_y + item_idx * (self.unload_item_height + self.unload_item_interval)
-                    
-                    # 绘制位置框
-                    cv2.rectangle(draw_img, 
-                                 (item_x, item_y),
-                                 (item_x + self.unload_item_width, item_y + self.unload_item_height),
-                                 (255,255,0), 1)
-                    cv2.putText(draw_img, f"L{layer_idx} I{item_idx}", (item_x-20, item_y-15), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
-            
-            # 绘制第一个空余位置（红色高亮）
-            if exists_flag == DetectStatus.EXIST:
-                target_x = int(coords[0] * self.camera_fx / coords[2] + self.camera_cx)
-                target_y = int(coords[1] * self.camera_fy / coords[2] + self.camera_cy)
-                cv2.circle(draw_img, (target_x, target_y), 8, (0,0,255), -1)
-                cv2.putText(draw_img, "TARGET", (target_x+10, target_y), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 2)
 
         # 6. 绘制图例
         legend_y = draw_img.shape[0] - 80
         cv2.putText(draw_img, "Legend:", (20, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
-        cv2.putText(draw_img, "Red: ROI", (20, legend_y+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
+        cv2.putText(draw_img, "Red: ROI / Target", (20, legend_y+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
         cv2.putText(draw_img, "Green/Yellow: Detected Region", (20, legend_y+35), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
-        cv2.putText(draw_img, "Yellow Line: Grip Edge", (20, legend_y+50), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,255), 1)
+        cv2.putText(draw_img, "Cyan: Theoretical Position", (20, legend_y+50), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
+        
+        # 下料专用图例
+        if ptype == PType.UNLOAD_CHECK:
+            cv2.putText(draw_img, "L: Layer, P: Position", (20, legend_y+65), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 
         return draw_img
 
@@ -3599,10 +3673,10 @@ if __name__ == "__main__":
 
     # 获取所有PNG文件
 
-    image_folder = "data/20260428"
-    image_files = list(Path(image_folder).glob("*.png"))
+    date_folder = "20260514"
+    image_folder = "data/" + date_folder
 
-    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img/20260428"
+    camera_img_folder = Path(__file__).parent.parent.parent / "camera_img" / date_folder
 
     image_files = list(camera_img_folder.glob("*.png"))
     print(image_files)
@@ -3625,14 +3699,14 @@ if __name__ == "__main__":
             continue
         # if i < 81:
         #     continue
-        print(f"\n处理文件 {i+1}/{len(image_files)}: {image_file.name}")
+        print(f"\n处理文件 {i}/{len(image_files)}: {image_file.name}")
         depth_filename = str(image_file)
         depth_img = cv2.imread(depth_filename, cv2.IMREAD_UNCHANGED)
 
         # 获取对应的RGB图像
         rgb_filename = get_rgb_filename(str(depth_filename))
         if not rgb_filename:
-            print(f"未找到对应的RGB图像: {depth_filename}")
+            print(f"未找到对应的RGB图像: {str(depth_filename)}")
             continue
         rgb_img = cv2.imread(rgb_filename)
 
@@ -3647,12 +3721,13 @@ if __name__ == "__main__":
         #     cv2.imwrite("./depth_8u.png", depth_img8u)
 
         # 切换排序规则 → 联动扫描方向
-        # detector.sort_rule = SortRule.SORT_BY_Y_DESC    # Y降序 → 从底部向上找水平直线
-        # detector.sort_rule = SortRule.SORT_BY_Y_ASC   # Y升序 → 从顶部向下找水平直线
+        # detector.feed_feed_sort_rule = SortRule.SORT_BY_Y_DESC    # Y降序 → 从底部向上找水平直线
+        # detector.feed_feed_sort_rule = SortRule.SORT_BY_Y_ASC   # Y升序 → 从顶部向下找水平直线
         
         # ptype = PType.MATERIAL_CHECK
-        ptype = PType.FEED_CHECK
-        # ptype = PType.UNLOAD_CHECK
+        # ptype = PType.FEED_CHECK
+        # ptype = PType.FEED_END_CHECK
+        ptype = PType.UNLOAD_CHECK
         detect_res = detector.detect(ptype, rgb_img, depth_img)
         print("检测结果:\n", json.dumps(detect_res, ensure_ascii=False, indent=2))
 
@@ -3673,7 +3748,7 @@ if __name__ == "__main__":
         cv2.imshow("rgb_img", rgb_img)
         # file_name = depth_filename.rsplit('.', 1)[0] + "_result.jpg"
         file_name = os.path.join(output_folder, f"{image_file.stem}_result.jpg")
-        # cv2.imwrite(file_name, result_img)
+        cv2.imwrite(file_name, result_img)
 
         if True: # ===================== 输出统计结果 =====================
             # stats.print_summary()

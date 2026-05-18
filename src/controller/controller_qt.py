@@ -800,7 +800,7 @@ class Controller(QThread):
             # pos = VisionSystem().run(camera_prepare_coords, loading=loading) # 相机只要x,y,z，不要r参数
 
             # algo_response = self.vision_service.execute_detection(ptype)
-            algo_response = self.vision_service.execute_detection_midian_depth(ptype)
+            algo_response = self.vision_service.execute_detection_midian_depth(ptype, check_estop_func=self.check_estop)
             logger.info(f"algo_response >>>>>>>> : {algo_response}")
 
             if algo_response["code"] == 0:
@@ -884,7 +884,7 @@ class Controller(QThread):
         self.vision_data_cache[key][photo_type] = {
             "coords": coords_list,
             "layer": layer,
-            "index": index
+            "position": index
         }
 
         # 2. 更新文件 (全量保存，防止覆盖其他动作的数据)
@@ -908,7 +908,7 @@ class Controller(QThread):
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "coords": coords_list,
                 "layer": layer,
-                "index": index
+                "position": index
             }
 
             # 写入文件
@@ -953,13 +953,13 @@ class Controller(QThread):
     def get_vision_data_full(self, process_addr, photo_type=None):
         """
        【新增方法】获取完整数据（包含 coords、layer、index）
-        :return: dict {"coords": [...], "layer": x, "index": x}
+        :return: dict {"coords": [...], "layer": x, "position": x}
         """
         key = hex(process_addr)
 
         if photo_type is None:
             logger.warning("获取完整数据失败：未指定photo_type")
-            return {"coords": [], "layer": None, "index": None}
+            return {"coords": [], "layer": None, "position": None}
 
         # 内存读取
         if key in self.vision_data_cache and photo_type in self.vision_data_cache[key]:
@@ -972,7 +972,7 @@ class Controller(QThread):
             return self.vision_data_cache[key][photo_type]
 
         logger.warning(f"未找到完整视觉数据: 地址={key}, 类型={photo_type}")
-        return {"coords": [], "layer": None, "index": None}
+        return {"coords": [], "layer": None, "position": None}
 
     def load_vision_file(self):
         """从文件加载视觉坐标数据到内存"""
@@ -995,7 +995,7 @@ class Controller(QThread):
                     self.vision_data_cache[addr_key][photo_type] = {
                         "coords": value.get("coords", []),
                         "layer": value.get("layer"),
-                        "index": value.get("index")
+                        "position": value.get("position")
                     }
 
         except Exception as e:
@@ -1325,8 +1325,8 @@ class Controller(QThread):
             # 2. 解析结果
             res_status = result.get("res", "error")
             coords = result.get("coords", [])
-            item_index = result.get("index", -1)
             layer = result.get("layer", -1)
+            item_index = result.get("position", -1)
 
             # === 状态分支处理 ===
             if res_status == "error":
@@ -3374,7 +3374,7 @@ class Controller(QThread):
         vision_points_data = self.get_vision_data_full(source_addr, const.photo_type_unloading)
         coords = vision_points_data["coords"]
         layer = vision_points_data["layer"]
-        index = vision_points_data["index"]
+        index = vision_points_data["position"]
         if not coords:
             logger.error(f"未找到地址 {hex(source_addr)} 的视觉数据")
             return
@@ -3385,13 +3385,20 @@ class Controller(QThread):
 
         # 构造下料点位
         target_x = const.unloding_x_list[index]  # 提取X坐标
+        if const.unloding_x_sort == const.unloding_x_sort_desc:
+            reverse_x_list = const.unloding_x_list[::-1]
+            target_x = reverse_x_list[index]
+
         target_y = const.unloding_y  # 使用固定Y坐标
 
         # 提取 Z 坐标 (基于底层高度 + 修正后的132mm层高 * 层数)
         # 注意：这里如果是从底层往上码垛，那就是 layer_0_z + layer * 132
 
         # 设定一个安全抛料距离，宁可高空抛物，绝不硬压
-        target_z = const.unloading_layer_0_z + (layer * const.unloading_layer_gap)
+
+        physical_layer = (const.product_total_layers - 1) - layer
+
+        target_z = const.unloading_layer_0_z + (physical_layer * const.unloading_layer_gap)
 
         # SAFE_DROP_Z = 3.0
         # target_z = const.unloading_layer_0_z + (layer * const.unloading_layer_gap) + SAFE_DROP_Z
@@ -3399,11 +3406,16 @@ class Controller(QThread):
         # Z 也可以使用视觉给出的坐标
         # target_z = coords[0][2]
 
-        logger.info(f"查表计算放料目标: 第{layer}层-第{index}列")
+        logger.info(f"查表计算放料目标: 第{physical_layer}层-第{index}列")
         logger.info(f"目标绝对坐标: X={target_x}, Y={target_y}, Z={target_z} (层高132mm)")
 
         # 计算 J4 角度以维持放料姿态绝对平行
         config_curr = "elbow_down"  # 下料一般用单一姿态
+
+        # 从前往后放，第一个索引位置的elbow需要是up状态
+        if const.unloding_x_sort == const.unloding_x_sort_desc and index == 0:
+            config_curr = "elbow_up"
+
         j4 = ScaraKinematics().calculate_motor_r_from_world_angle(
             target_x, target_y, target_z, const.fine_unloading_world_angle,
             self.l1, self.l2, self.z0, self.nn3,

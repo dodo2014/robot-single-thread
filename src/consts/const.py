@@ -65,7 +65,7 @@ VAL_RESET = 0  # 复位/空闲
 
 # 机械臂J1活动范围
 J1_LIMIT_MAX = 98
-J1_LIMIT_MIN = -98
+J1_LIMIT_MIN = -105
 
 # 机械臂 J2 活动范围
 J2_LIMIT_MAX = 162
@@ -128,7 +128,7 @@ head_layer_index_name = "current_head_layer_index"
 # 上次成功抓取的层
 last_picked_layer_name = "last_picked_layer"
 
-# 上料区物料参数
+# 上料区参数
 product_height = 117  # 单个产品的高度(mm)
 product_width = 123  # 单个产品的宽度(mm)
 interval_height = 15  # 层与层之间垫木木条的高度（mm）
@@ -163,8 +163,12 @@ unloding_x_list = [200, 350, 500, 650, 800] # 5个料位的绝对X坐标
 unloding_y = -1240    #  固定的Y坐标
 unloading_layer_0_z = -100  # 第0层的放料高度
 unloading_layer_gap = product_height + interval_height  # 产品高度 + 垫木高度
-fine_unloading_world_angle = 2  # 放料末端绝对角度°
+fine_unloading_world_angle = -3  # 放料末端绝对角度°
 
+# 下料排序
+unloding_x_sort_asc = 1  # 下料X坐标排序，1/X从小到大排序, 2/X从大到小排序
+unloding_x_sort_desc = 2  #
+unloding_x_sort = unloding_x_sort_desc
 
 # 上料架的状态地址，用于发送上料架状态数据
 ADDR_PRODUCT_LOADING_RACK = 0x400C8  # 200

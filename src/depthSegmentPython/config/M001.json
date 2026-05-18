@@ -31,7 +31,7 @@
 	"product_width": 40,           // 单个产品的宽度（mm），用于过滤直线；40不是真实宽度，是产品L型上边沿的宽度
 	"interval_height": 92,          // 层与层之间间隔木条的高度（mm），层高需要对product_height进行补偿，product_height+interval_height=真实层高
 	"product_start_height": 420,    // 顶层产品初始高度（mm）
-	"tray_start_height": 1000,      // 托盘初始高度（mm），底层产品的基准深度
+	"tray_start_height": 315,      // 托盘初始高度（mm），底层产品的基准深度
 	"product_count_per_layer": 2,  // 上料每层产品数量
 	
 	// ==================== 端面水平线检测配置（相机翻转90度） ====================
@@ -49,6 +49,7 @@
 	"end_offset_x": 0,
 	"end_offset_y": 0,
 	"end_offset_z": 0,
+	"end_sort_rule": 3,
 	
 	// ==================== 上料区域配置 ====================
 	"feed_roi_x": 300,              // 上料ROI左上角X坐标（像素）
@@ -63,7 +64,7 @@
 
 	// ==================== 上料算法参数 ====================
 	"feed_depth_min": 400,          // 上料区域有效深度最小值（mm），过滤近距离噪声
-	"feed_depth_max": 490,         // 上料区域有效深度最大值（mm），过滤远距离背景
+	"feed_depth_max": 470,         // 上料区域有效深度最大值（mm），过滤远距离背景
 	"feed_depth_thresh": 7,		// 深度跳变阈值
 	"feed_min_length": 200,         // 产品最小宽度（像素），用于过滤过短的直线
 	"feed_edge_index": 0,			// 抓取上料产品边缘的序号（0表示第一个，1表示第二个）
@@ -71,6 +72,10 @@
 	"feed_offset_y": 0,			// 抓取位置到边缘的偏移量y(mm)
 	"feed_offset_z": 0,			// 抓取位置到边缘的偏移量z(mm)
 	"feed_use_rgb": 1,				// 是否融合rgb图检测
+
+    "feed_sort_rule": 0,           //上料排序规则：0=Y降序(从下到上)，1=Y升序(从上到下)
+								   // 0: 按Y降序（从ROI底部向上扫描，找第一个水平直线）
+                                   // 1: 按Y升序（从ROI顶部向下扫描，找第一个水平直线）
 
 	"template_type": "depth",		// 模板匹配类型："depth" or "rgb"
 	"template_path": "./templates/0403.png", //模板图像
@@ -106,12 +111,16 @@
 	"unload_roi_w": 700,               // 下料区域ROI宽度（像素）
 	"unload_roi_h": 600,               // 下料区域ROI高度（像素）
 	
-	// ==================== 下料算法参数 ====================
-	"unload_layer_count": 6,           // 下料区域总层数
-	"unload_layer_height": 132,        // 每层高度（mm），用于计算不同层的深度
-	"unload_item_count_per_layer": 5,  // 每层可放置的产品数量
-	"unload_item_interval": 20,        // 同层产品之间的间隔（像素）
-	"unload_item_width": 600,          // 产品在下料区域的宽度（像素）
-	"unload_item_height": 60,          // 产品在下料区域的高度（像素）
-	"unload_depth_threshold": 20       // 深度差异阈值（mm），用于判断该位置是否有物料
+	// ==================== 下料算法参数（单位：mm）====================
+	"unload_tray_depth": 1360,      	// 托盘初始高度（mm），底层产品的基准深度
+	"unload_start_x": 50.0,         	// 下料区域第一个产品左上角X坐标（mm）
+	"unload_start_y": -350.0,       	// 下料区域第一个产品左上角Y坐标（mm）
+	"unload_item_width": 123.0,      	// 产品宽度（mm）//x方向
+	"unload_item_height": 117.0,     	// 产品高度（mm）//y方向
+	"unload_item_interval": 25.0,   	// 产品间间隔（mm）//y方向
+	"unload_layer_thickness": 132.0,    // 每层高度（mm），z方向
+	"unload_item_count_per_layer": 5,  	// 每层可放置的产品数量
+	"unload_layer_count": 6,           	// 下料区域总层数
+	//"unload_depth_threshold": 15.0,    	// 深度差异阈值（mm），用于判断该位置是否有物料
+	"unload_sort_rule": 1             	// 下料排序规则：0=Y降序(从下到上)，1=Y升序(从上到下)
 }

@@ -62,15 +62,28 @@ class DetectAlgoService:
             logger.error(f"Unexpected error during camera init: {e}")
 
     def _warm_up(self):
-        """抽取出预热逻辑"""
-        # 抛弃前 10-20 帧，让自动曝光稳定，并强制触发 SW_MODE 的查找表计算
+        """抽取出预热逻辑：持续获取有效帧，直到帧数达标，模拟官方示例的 while True + continue 语义"""
         logger.info("Warming up camera...")
-        try:
-            for _ in range(20):
-                self.device.get_frames(timeout_ms=100)
-            logger.info("Camera is ready.")
-        except Exception as e:
-            logger.warning(f"Camera warm-up interrupted: {e}")
+        warmed = 0
+        target = 20
+        max_attempts = 100
+        attempt = 0
+        while warmed < target and attempt < max_attempts:
+            try:
+                success, color_frame, depth_frame = self.device.get_frames(timeout_ms=500)
+                if success:
+                    warmed += 1
+                    # 【核心】：显式释放底层 C++ 帧缓冲！！
+                    # 强迫 pyorbbecsdk 立即将 Buffer 归还给 SDK，防止缓存池枯竭
+                    del color_frame
+                    del depth_frame
+                else:
+                    time.sleep(0.033)
+            except Exception as e:
+                logger.warning(f"Camera warm-up frame error: {e}")
+                time.sleep(0.033)
+            attempt += 1
+        logger.info(f"Camera warm-up complete (got {warmed} valid frames in {attempt} attempts).")
 
     def _keep_alive_worker(self):
         while not self.stop_event.is_set():
@@ -153,7 +166,6 @@ class DetectAlgoService:
             }
         """
         last_err = ""
-
         for attempt in range(self.max_retries):
             # 1. 检查并尝试重连
             if not self.device.is_alive():
@@ -302,7 +314,7 @@ class DetectAlgoService:
         logger.info(f"Processing error: Max retries reached. {last_err}")
         return {"code": -1, "err_msg": f"Max retries reached. Last error: {last_err}"}
 
-    def execute_detection_midian_depth(self, ptype:int, number:int=21):
+    def execute_detection_midian_depth(self, ptype:int, number:int=21, check_estop_func=None):
         """获取深度值的中位数返回值"""
 
         # 在正式获取图像前，排空旧图
@@ -318,11 +330,16 @@ class DetectAlgoService:
                 time.sleep(0.01)
 
         while len(results) < required_count:
+            if check_estop_func and check_estop_func():
+                return {"code":-99, "err_msg":f"检测异常: 系统急停"}
             result = self.execute_detection(ptype, detect=1)
             print(f"result is : {result}")
 
             # 过滤有效深度的值
-            if result["code"] == 0 and result["result"]["coords"][2] <= const.depth_valid_filter:
+            if ptype in (const.photo_type_loading, const.photo_type_find_head):
+                if result["code"] == 0 and result["result"]["coords"][2] <= const.depth_valid_filter:
+                    results.append(result)
+            else:
                 results.append(result)
 
             # 给底层 USB 留出喘息时间，避免阻塞 (30fps = 33ms 一张)
@@ -441,10 +458,12 @@ def main():
         #     time.sleep(2)
 
         start_time = round(time.time() * 1000)
-        response = service.execute_detection(ptype=const.photo_type_loading, detect=1)
+        logger.info(f"Start Time: {start_time}")
+        # response = service.execute_detection(ptype=const.photo_type_loading, detect=1)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
-        # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
+        logger.info(f"response : {response}")
         print(response)
 
         # 处理结果

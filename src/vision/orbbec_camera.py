@@ -20,7 +20,7 @@ class OrbbecCameraDevice:
         self.pipeline = None
         self.config = None
 
-        self.align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
+        self.align_filter = None
 
         # 流配置 标志位
         # self.is_stream_configured = False
@@ -52,6 +52,9 @@ class OrbbecCameraDevice:
 
             if self.config is None:
                 self.config = Config()
+
+            if self.align_filter is None:
+                self.align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
 
             # 1. 获取彩色传感器(COLOR_SENSOR)的配置列表
             color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
@@ -222,6 +225,7 @@ class OrbbecCameraDevice:
             # self.pipeline.start(self.config)
             # 3. 启动流
             try:
+                self.pipeline.enable_frame_sync()
                 self.pipeline.start(self.config)
                 self.is_connected = True
 
@@ -255,6 +259,7 @@ class OrbbecCameraDevice:
                 pass
             self.pipeline = None
         self.config = None
+        self.align_filter = None
 
     def get_frames(self, timeout_ms=5000):
         """
@@ -269,13 +274,20 @@ class OrbbecCameraDevice:
             if not frames:
                 return False, None, None
 
-            try:
-                aligned_frames = self.align_filter.process(frames)
-                aligned_frames = aligned_frames.as_frame_set()
-            except OBError as e:
-                logger.error(f"Alignment failed: {e}")
-                return False, None, None
+            if self.align_filter:
+                try:
+                    aligned_frames = self.align_filter.process(frames)
+                    if aligned_frames is None:
+                        return False, None, None
 
+                    aligned_frames = aligned_frames.as_frame_set()
+                except OBError as e:
+                    logger.error(f"Alignment failed: {e}")
+                    return False, None, None
+            else:
+                aligned_frames = frames  # 如果没有滤波器，直接用原图
+
+            # 提取彩色和深度帧
             color_frame = aligned_frames.get_color_frame()
             depth_frame = aligned_frames.get_depth_frame()
 
@@ -325,7 +337,8 @@ class OrbbecCameraDevice:
                     if color: del color
                     if depth: del depth
                     del frames
-            except Exception:
+            except Exception as e:
+                logger.info(f"flush frames error: {e}\n {traceback.format_exc()}")
                 pass
 
     def is_alive(self):
@@ -484,9 +497,9 @@ if __name__ == "__main__":
         camera.flush_frames(5)
 
         # 运行诊断
-        for i in range(5):
-            camera.diagnose_alignment_issue()
-            logger.info("\n\n")
+        # for i in range(5):
+        #     camera.diagnose_alignment_issue()
+        #     logger.info("\n\n")
     else:
         logger.error(f"Failed to connect: {msg}")
     sys.exit(1)
