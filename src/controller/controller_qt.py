@@ -817,7 +817,8 @@ class Controller(QThread):
                 res = "error"
                 exists = result.get("exists")
 
-                item_index = result.get("index", -1)
+                layer = result.get("layer")
+                position = result.get("position")
 
                 if ptype == const.photo_type_normal:  # 1/有料，报ok
                     if exists == 1:
@@ -849,7 +850,8 @@ class Controller(QThread):
                     "res": res,
                     "coords": detected_coords,
                     "trigger": trigger_type,
-                    "index": item_index
+                    "layer": layer,
+                    "position": position
                 }
             else:
                 logger.error(f"视觉识别失败: {algo_response.get('err_msg')}")
@@ -1298,6 +1300,9 @@ class Controller(QThread):
 
     def handle_vision_recursive_v1(self, process_addr, point, loading=None, photo_type=const.photo_type_normal):
         """
+        拍照识别逻辑
+        料头、上料、下料的识别坐标，会保存到json文件，供get_vision_data调用
+
         :param process_addr: 动作地址位
         :param point: 拍照坐标
         :param loading, 上下料参数，1/上料，2/下料
@@ -1389,10 +1394,16 @@ class Controller(QThread):
             # 【核心新增】：下料区放垫木判定拦截
             # =======================================================
             if photo_type == const.photo_type_unloading and item_index == 0:
-                # 阻塞在这里，直到工人放好木条并复位
-                if not self._handle_wood_stick_placement():
-                    # 如果返回 False，说明被急停打断，直接退出
-                    return False
+                physical_layer = (const.product_total_layers - 1) - layer
+                if physical_layer == 0: # 第0层，已经有垫木了，不需要提示
+                    pass
+                else:
+                    # # 阻塞在这里，直到工人放好木条并复位
+                    # if not self._handle_wood_stick_placement():
+                    #     # 如果返回 False，说明被急停打断，直接退出
+                    #     return False
+
+                    pass
 
             # === 距离合适 (<= 400)，计算最终抓取坐标并保存 ===
             transform_coords = []
@@ -1401,6 +1412,9 @@ class Controller(QThread):
                     # 找端头模式, 使用【相机】对齐目标
                     # 传入 cheat_gripper_offset 标志 (需在 transform_tool_coord 内部实现，让夹爪offset = 相机offset)
                     trans_coord = self.transform_tool_coord(coord, align_camera=1, joint_valid=False)
+                elif photo_type == const.photo_type_unloading:
+                    # 下料拍照，不做转换
+                    trans_coord = coord
                 else:
                     # 普通模式，使用【夹爪】对齐目标
                     trans_coord = self.transform_tool_coord(coord)
@@ -1553,7 +1567,7 @@ class Controller(QThread):
         return True
 
     def execute_standard_motion_sequence(self, process_addr, points_sequence, loading=None, photo_type=None,
-                                         send_done=True):
+                                         send_done=True, vision_retry=False):
         """
         标准运动序列执行函数, 没有插值
         :param process_addr:动作地址位
@@ -1561,6 +1575,7 @@ class Controller(QThread):
         :param loading: 上下料标记，1/上料，2/下料
         :param photo_type: 普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
         :param send_done: 执行完毕后是否向 PLC 发送 13 完成信号。默认为 True。
+        :param vision_retry, 缝激活“死等20并重试”的逻辑
         """
         # 1. 检查急停
         if self.check_estop():
@@ -1569,6 +1584,7 @@ class Controller(QThread):
 
         points_count = len(points_sequence)
 
+        # udp连接
         udp_client = UdpClient(
             local_port=const.inspection_udp_local_port,
             remote_ip=const.inspection_udp_ip,
@@ -1577,6 +1593,7 @@ class Controller(QThread):
 
         has_ccd_triggered = False  # 记录本轮流程是否触发过 CCD
         has_laser_triggered = False  # 记录本轮流程是否触发过 Laser
+        has_depth_vision_triggered = False
 
         try:
             for i in range(points_count - 1):
@@ -1607,6 +1624,8 @@ class Controller(QThread):
                     vision_ok = True
 
                     if photo_trigger == const.photo_trigger_depth:
+                        has_depth_vision_triggered = True
+
                         # 调用视觉逻辑
                         vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
                         if vision_res == "OK":
@@ -1629,6 +1648,7 @@ class Controller(QThread):
                         time.sleep(1)
                         # 阻塞等待 OK，超时时间设为 60 秒 (根据实际算法耗时调整)
                         # 调用封装的等待方法，把 controller 的急停检测方法当做参数传进去
+
                         # if udp_client.wait_for_response(
                         #         expected_msg="OK",
                         #         timeout_sec=60.0,
@@ -1673,18 +1693,23 @@ class Controller(QThread):
                     if vision_ok:
                         break  # 成功，退出 while，进入下一个 for (如果有的话)
                     else:
-                        # 发送 NG 信号
-                        self.plc.write_register(process_addr, 16)
-                        logger.warning("视觉/流程 NG (16)，等待复位 (20)...")
+                        logger.error("视觉/外设处理结果为 NG，发送 16")
+                        if send_done:
+                            self.plc.write_register(process_addr, 16)
 
-                        # 等待 PLC 复位信号
-                        if self.wait_for_plc_val(process_addr, 20, timeout=7200):
-                            logger.info("收到 20，重试当前步骤")
-                            # 这里的 continue 会导致重新执行 _move_segment_to_target
-                            # 也就是重新走到 end_point，然后重新触发拍照
-                            continue
+                        if vision_retry:
+                            logger.warning("开启了重试模式：等待复位 (20)...")
+                            # 等待 PLC 复位信号
+                            if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                                logger.info("收到 20，重试当前步骤")
+                                # 这里的 continue 会导致重新执行 _move_segment_to_target
+                                # 也就是重新走到 end_point，然后重新触发拍照
+                                continue  # 回到 while 循环头部重试
+                            else:
+                                return False
                         else:
-                            return False
+                            logger.info("未开启重试模式：交由 PLC 控制逻辑跳转，流程结束")
+                            return False  # 直接退出当前引擎
 
             # ========================================================
             # 所有点位执行完成，发送UDP结束信号
@@ -1699,8 +1724,14 @@ class Controller(QThread):
 
             # 序列全部完成，发送 13
             if send_done:
-                logger.info(f"标准序列全部完成，发送 13 结束信号")
-                self.plc.write_register(process_addr, 13)
+                # logger.info(f"标准序列全部完成，发送 13 结束信号")
+                # self.plc.write_register(process_addr, 13)
+                if has_depth_vision_triggered:
+                    logger.info(f"标准序列全部完成 (执行过 Vision 拍照分析)，发送 15 结束信号")
+                    self.plc.write_register(process_addr, 15)
+                else:
+                    logger.info(f"标准序列全部完成 (未执行 深度Vision 拍照分析)，发送 13 结束信号")
+                    self.plc.write_register(process_addr, 13)
             else:
                 logger.info(f"标准序列完成，等待后续拼接动作 (暂不发 13)")
 
@@ -1717,9 +1748,47 @@ class Controller(QThread):
         """
         logger.critical("料架全空！请更换料车！")
 
+        #  优先移动到空料安全点，便于新的料车上料
+        try:
+            # 1. 读取 empty_points 配置
+            empty_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("empty_points", [])
+
+            if empty_points:
+                logger.info(f"发现空料安全点配置，开始安全撤离 (共 {len(empty_points)} 个点)...")
+
+                # 2. 获取当前实时坐标作为起点，确保轨迹连续
+                realtime_pt = self.get_realtime_point()
+                if realtime_pt:
+                    safe_sequence = [realtime_pt] + empty_points
+
+                    # 3. 执行撤离运动
+                    # 必须设置 send_done=False，因为此时动作还没结束，接下来还要发 13 和报警
+                    move_ok = self.execute_standard_motion_sequence(
+                        process_addr=process_addr,
+                        points_sequence=safe_sequence,
+                        send_done=False
+                    )
+
+                    if not move_ok:
+                        logger.error("移动到空料安全点失败或被急停打断！")
+                else:
+                    logger.error("获取实时坐标失败，取消安全撤离。")
+            else:
+                logger.warning("未配置空料安全点 (empty_points)，机械臂将停在原地报警。")
+
+        except Exception as e:
+            logger.error(f"执行空料安全点撤离时发生异常: {e}")
+
+
         # 1. 内部状态重置
-        self.loading_index.reset_search_index(const.search_index_name, const.search_index_name)  # 自动复位，准备迎接新料车
-        self.loading_index.reset_search_index(const.head_layer_index_name, const.search_index_name)  # 自动复位，准备迎接新料车
+        self.loading_index.reset_search_index(const.search_index_name)  # 自动复位，准备迎接新料车
+        self.loading_index.reset_search_index(const.head_layer_index_name)  # 自动复位，准备迎接新料车
+        self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+
+        self.loading_index.current_search_index = 0
+        self.loading_index.current_head_layer_index = 0
+        self.loading_index.last_picked_layer = -1
+
         self.need_rack_mapping = True  # 要求换料车后重新扫描
 
         # 2. 终止当前业务动作
@@ -2082,7 +2151,8 @@ class Controller(QThread):
         方案二
         用于解决大视野找端头带来的 X 轴畸变问题。
 
-        此方案的特点在于利用原有的精拍阵列搜寻点位，端头找到物料坐标之后，利用转换后的X，计算近似的精拍搜索点位，运动到固定搜索点位拍照
+        此方案的特点在于利用原先设定好的精拍阵列搜寻点位
+        端头找到物料坐标之后，利用转换后的X，计算近似的精拍搜索点位，运动到固定搜索点位拍照
         """
         if self.check_estop(): return False
 
@@ -2314,7 +2384,7 @@ class Controller(QThread):
         y_offset_dist = const.product_y_offset
         x_offset_dist = const.depth_interference_x_offset
 
-        # 2. 读取记忆的层数 (假设你已经有了 current_layer_index 属性)
+        # 2. 读取记忆的层数 (假设你已经有了 current_layer_index 属性)，layer_idx从0开始
         start_layer = getattr(self.loading_index, 'current_head_layer_index', 0)
         start_layer = max(0, min(start_layer, len(head_points) - 1))
 
@@ -2322,7 +2392,6 @@ class Controller(QThread):
         # 阶段 1：逐层寻找端头
         # =======================================================
         found_layer_idx = -1
-        valid_materials_base_coords = []
         target_material_base_coord = None  # 直接存放唯一的目标基座标
 
         # === 外层循环：逐层寻找端头 ===
@@ -2374,16 +2443,31 @@ class Controller(QThread):
                     if layer_idx == self.loading_index.last_picked_layer:
                         logger.info(f"第 {layer_idx} 层刚刚被抓空，露出垫木！")
 
-                        # 挂起死等人工取垫木
-                        if not self._handle_wood_stick_removal(process_addr, layer_idx):
-                            return False  # 急停打断
+                        # 判断当前层是否是料架的 "最底层"
+                        is_bottom_layer = (layer_idx == len(head_points) - 1)
+                        if is_bottom_layer:
+                            logger.critical(f"最底层 (第 {layer_idx} 层) 已被抓空，整车物料全部抓完！")
+                            # 重置各种标志位，准备迎接新料车
+                            self.loading_index.current_head_layer_index = 0
+                            self.loading_index.reset_search_index(const.head_layer_index_name)
 
-                        # 人工取走垫木，按复位恢复后，清除标志位，避免重复报警
-                        # self.last_picked_layer = -1
-                        self.loading_index.last_picked_layer = -1
-                        self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+                            # 料架全空换新车时，重置抓取记录
+                            self.loading_index.last_picked_layer = -1
+                            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
 
-                        logger.info(f"第 {layer_idx} 层垫木已移除，准备下探到新楼层...")
+                            # 直接触发空料车报警逻辑，退出当前执行引擎
+                            return self._handle_empty_rack_and_wait(process_addr)
+                        else:
+                            # 挂起死等人工取垫木
+                            if not self._handle_wood_stick_removal(process_addr, layer_idx):
+                                return False  # 急停打断
+
+                            # 人工取走垫木，按复位恢复后，清除标志位，避免重复报警
+                            # self.last_picked_layer = -1
+                            self.loading_index.last_picked_layer = -1
+                            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+
+                            logger.info(f"第 {layer_idx} 层垫木已移除，准备下探到新楼层...")
                     else:
                         # 只是路过空层 (比如刚开机前两层就是空的)
                         logger.info(f"第 {layer_idx} 层视野无料 (跳过空层)，准备下探...")
@@ -2535,7 +2619,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 首次初始位去上料位拍照
+    # 首次初始位去缓存位拍照
     def handle_process_0x40082(self, process_addr, value):
         # 状态码为整数
         # value = raw_values[0], 或者使用下面的参数
@@ -2636,14 +2720,14 @@ class Controller(QThread):
         logger.info(f"point list: {points}")
 
         # 执行运动控制
-        self.execute_standard_motion_sequence(process_addr, points)
+        self.execute_standard_motion_sequence(process_addr, points, vision_retry=True)
 
         # 动作全部成功完成后，更新全局记录
         # 将当前动作的最后一个点，标记为下一次动作的起点
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 下料拍照位回门前等待位
+    # 缓存拍照位回门前等待位
     def handle_process_0x40085(self, process_addr, value):
         if value != 10:
             return
@@ -2675,7 +2759,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去加工料位吹气
+    # 门前等待位去工装位吹气（加工完开门）
     def handle_process_0x40086(self, process_addr, value):
         if value != 10:
             return
@@ -2709,7 +2793,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去加工料位拍照
+    # 工装吹气位去工装位拍照
     def handle_process_0x40087(self, process_addr, value):
         if value != 10:
             return
@@ -2744,7 +2828,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    #  臂去加工位取料
+    #  工装拍照位去工装位取料
     def handle_process_0x40088(self, process_addr, value):
         if value != 10:
             return
@@ -2786,7 +2870,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去缓存位
+    # 工装取料位去缓存位
     def handle_process_0x40089(self, process_addr, value):
         if value != 10:
             return
@@ -2831,7 +2915,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去加工位吹气
+    # 缓存位去工装位吹气
     def handle_process_0x4008A(self, process_addr, value):
         if value != 10:
             return
@@ -2866,7 +2950,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去加工位拍照
+    # 加工吹气位去加工位拍照
     def handle_process_0x4008B(self, process_addr, value):
         if value != 10:
             return
@@ -2901,10 +2985,10 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去上料位拍照
+    # 工装拍照位去上料位拍照
     def handle_process_0x4008C(self, process_addr, value):
         """
-        上料为拍照，先运动到普通点(安全点)，再执行拍照阵列搜索运动
+        上料位置拍照，先从工装位置运动到普通点(安全点)，再执行拍照阵列搜索运动
         :param process_addr:
         :param value:
         :return:
@@ -2937,7 +3021,7 @@ class Controller(QThread):
 
         points.extend(process_points)
         # 执行运动控制
-        logger.info(f"---> 阶段 1: 优先前往安全固定点: {process_points} <---")
+        logger.info(f"---> 阶段 1: 优先执行工装位置 -> 安全固定点: {process_points} <---")
         ps_success = self.execute_standard_motion_sequence(
             process_addr,
             points,
@@ -2981,7 +3065,7 @@ class Controller(QThread):
         else:
             logger.error(f"动作 {hex(process_addr)} 搜寻终止（缺料、急停或硬件故障）。")
 
-    # 臂去上料位取料
+    # 上料拍照位去上料位取料
     def handle_process_0x4008D(self, process_addr, value):
         if value != 10:
             return
@@ -3065,11 +3149,16 @@ class Controller(QThread):
         r_comp = const.loading_r_comp_back + (const.loading_r_comp_front - const.loading_r_comp_back) * x_ratio
         logger.info(f"4008D r_ratio : {x_ratio}, r_comp : {r_comp}")
 
-        target_x = line_x + x_comp
-        # target_y = head_y + offset_y + y_comp
+        # 不补偿
+        target_x = line_x
         target_y = head_y + offset_y
-        target_z = line_z
         target_r = line_r
+
+        target_z = line_z
+
+        # 线性补偿
+        # target_x = line_x + x_comp
+        # target_y = head_y + offset_y + y_comp
         # target_r = line_r + r_comp
 
         target_point = {
@@ -3150,7 +3239,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去加工位放料
+    # 上料取料去位加工位放料
     def handle_process_0x4008E(self, process_addr, value):
         if value != 10:
             return
@@ -3263,17 +3352,18 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 臂缓存位取料
-    def handle_process_0x40090(self, process_addr, value):
+    def handle_process_0x40091(self, process_addr, value):
         if value != 10:
             return
 
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂缓存位取料")
+        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去缓存位取料")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
-        last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x4008F/262287
-        last_process_points = self.cfg_manager.get_process_config(hex(last_process_addr).upper()).get("points")
+        # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x4008F/262287
+        # last_process_points = self.cfg_manager.get_process_config(hex(last_process_addr).upper()).get("points")
         # 取最后一个点的坐标，作为当前流程的起始坐标
-        process_start_point = last_process_points[-1]
+        # process_start_point = last_process_points[-1]
+        process_start_point = self.get_realtime_point()
 
         # 2. 构建点位列表 [Origin, P1, P2...]
         points = [process_start_point]
@@ -3298,7 +3388,7 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 臂去放料位拍照
-    def handle_process_0x40091(self, process_addr, value):
+    def handle_process_0x40090(self, process_addr, value):
         if value != 10:
             return
 
@@ -3372,6 +3462,7 @@ class Controller(QThread):
 
         # 3. 读取视觉数据，eg:[p1, p2, p3]
         vision_points_data = self.get_vision_data_full(source_addr, const.photo_type_unloading)
+        logger.info(f"vision points data for 放料: {vision_points_data}")
         coords = vision_points_data["coords"]
         layer = vision_points_data["layer"]
         index = vision_points_data["position"]
@@ -3394,7 +3485,7 @@ class Controller(QThread):
         # 提取 Z 坐标 (基于底层高度 + 修正后的132mm层高 * 层数)
         # 注意：这里如果是从底层往上码垛，那就是 layer_0_z + layer * 132
 
-        # 设定一个安全抛料距离，宁可高空抛物，绝不硬压
+        # 设定一个安全抛料距离，不硬压
 
         physical_layer = (const.product_total_layers - 1) - layer
 
@@ -3421,6 +3512,9 @@ class Controller(QThread):
             self.l1, self.l2, self.z0, self.nn3,
             elbow_config=config_curr
         )
+        # if not j4:
+        #     logger.info(f"关节4逆解失败")
+        #     return
 
         final_unload_target = {
             "name": f"Unload_L{layer}_I{index}",
@@ -3428,6 +3522,7 @@ class Controller(QThread):
             "config": config_curr,
             "photo": 0
         }
+        logger.info(f"final unload point: {final_unload_target}")
 
         points.append(final_unload_target)
 

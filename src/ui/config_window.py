@@ -76,7 +76,7 @@ class ConfigEditorUI(QMainWindow):
         # 【新增】垫木提示框实例
         self.wood_stick_dialog = None
 
-        # 【新增】连接信号到槽函数
+        # 上料取垫木提示框
         self.controller.sig_wood_stick_alarm.connect(self.show_wood_stick_dialog)
         self.controller.sig_wood_stick_clear.connect(self.close_wood_stick_dialog)
 
@@ -1198,7 +1198,7 @@ class ConfigEditorUI(QMainWindow):
 
         # 更新提示文本
         self.lbl_wood_msg.setText(
-            f"上层物料已抓空！\n\n请取走第 {layer_idx} 层的垫木！\n\n(完成后请按下机台【复位】按钮)")
+            f"上层物料已抓空！\n\n请取走第 {layer_idx + 1} 层的垫木！\n\n(完成后请按下机台【复位】按钮)")
         self.wood_stick_dialog.show()
 
     def close_wood_stick_dialog(self):
@@ -1206,7 +1206,7 @@ class ConfigEditorUI(QMainWindow):
         if self.wood_stick_dialog and self.wood_stick_dialog.isVisible():
             self.wood_stick_dialog.hide()
 
-    def show_unloading_wood_place_dialog(self, code):
+    def show_unloading_wood_place_dialog(self):
         """显示非阻塞警告弹窗"""
         if not self.unloading_wood_stick_dialog:
             self.unloading_wood_stick_dialog = QDialog(self)
@@ -1229,7 +1229,7 @@ class ConfigEditorUI(QMainWindow):
             layout.addWidget(self.lbl_wood_msg)
             self.unloading_wood_stick_dialog.setLayout(layout)
 
-        self.lbl_wood_msg.setText(f"请放置垫木！\n\n(完成后请按下机台【复位】按钮)")
+        self.lbl_wood_msg.setText(f"下料架放置垫木！\n\n(完成后请按下机台【复位】按钮)")
         self.unloading_wood_stick_dialog.show()
 
     def close_unloading_wood_place_dialog(self):

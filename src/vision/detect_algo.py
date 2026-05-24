@@ -40,6 +40,7 @@ class DetectAlgoService:
             raise RuntimeError(f"Algorithm Init Failed: {detector_init_res}")
 
         # 异步存图队列与线程
+        self.save_jpg = 1
         self.save_queue = queue.Queue(maxsize=100)  # 限制队列长度防止内存溢出
         self.stop_event = threading.Event()
         self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
@@ -118,11 +119,12 @@ class DetectAlgoService:
                 if not os.path.exists(path):
                     os.makedirs(path, exist_ok=True)
 
-                # RGB -> BGR 并保存
-                bgr_img = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(f"{path}/rgb_{timestamp}.jpg", bgr_img)
-                # 保存 16bit 深度图
-                cv2.imwrite(f"{path}/depth_{timestamp}.png", depth_img)
+                if self.save_jpg:
+                    # RGB -> BGR 并保存
+                    bgr_img = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
+                    cv2.imwrite(f"{path}/rgb_{timestamp}.jpg", bgr_img)
+                    # 保存 16bit 深度图
+                    cv2.imwrite(f"{path}/depth_{timestamp}.png", depth_img)
 
                 self.save_queue.task_done()
             except queue.Empty:
@@ -287,7 +289,8 @@ class DetectAlgoService:
                     result_img = self.detector.draw_result_with_rotated_box(depth_color, result)
                     # cv2.imshow("result-line", result_img)
 
-                    cv2.imwrite(f"{path}/detect_result_horizontal_line_{timestamp}.jpg", result_img)
+                    if self.save_jpg:
+                        cv2.imwrite(f"{path}/detect_result_horizontal_line_{timestamp}.jpg", result_img)
 
                     cv2.waitKey(0)
 
@@ -463,6 +466,7 @@ def main():
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
         response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
         logger.info(f"response : {response}")
         print(response)
 

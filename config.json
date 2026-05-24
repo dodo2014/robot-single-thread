@@ -25,7 +25,7 @@
                     "offset_y": 0,
                     "z_diff": 60.3,
                     "gripper_install_angle": -90,
-                    "angle_offset": 0.5
+                    "angle_offset": 3.26
                 }
             },
             {
@@ -579,7 +579,7 @@
                     "coords": [
                         -5.25,
                         1087.42,
-                        218.18,
+                        512.68,
                         -134.51
                     ],
                     "photo": 0,
@@ -645,34 +645,67 @@
             ],
             "layer_head_points": [
                 {
+                    "name": "P0",
+                    "coords": [
+                        -60.76,
+                        304.6,
+                        490.32,
+                        -109.16
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "P1",
+                    "coords": [
+                        -60.76,
+                        304.6,
+                        358.32,
+                        -109.16
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
                     "name": "P2",
                     "coords": [
-                        -75.94,
-                        313.9,
-                        140.18,
-                        -113.63
+                        -60.76,
+                        304.6,
+                        226.32,
+                        -109.16
                     ],
                     "photo": 0,
                     "config": "elbow_up"
                 },
                 {
-                    "name": "Teach_P3",
+                    "name": "P3",
                     "coords": [
-                        -75.94,
-                        313.9,
-                        8.18,
-                        -113.63
+                        -60.76,
+                        304.6,
+                        94.32,
+                        -109.16
                     ],
                     "photo": 0,
                     "config": "elbow_up"
                 },
                 {
-                    "name": "Teach_P4",
+                    "name": "P4",
                     "coords": [
-                        -75.94,
-                        313.9,
-                        -123.82,
-                        -113.63
+                        -60.76,
+                        304.6,
+                        -37.68,
+                        -109.16
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                },
+                {
+                    "name": "P5",
+                    "coords": [
+                        -60.76,
+                        304.6,
+                        -169.68,
+                        -109.16
                     ],
                     "photo": 0,
                     "config": "elbow_up"
@@ -696,8 +729,22 @@
                 "points": "普通点位",
                 "layer_head_points": "端头搜寻点位",
                 "search_points": "上料阵列搜寻点位",
-                "flip_via_points": "翻肘过渡点位"
-            }
+                "flip_via_points": "翻肘过渡点位",
+                "empty_points": "空料安全点"
+            },
+            "empty_points": [
+                {
+                    "name": "P1",
+                    "coords": [
+                        -5.25,
+                        1087.42,
+                        512.68,
+                        -134.51
+                    ],
+                    "photo": 0,
+                    "config": "elbow_up"
+                }
+            ]
         },
         "0X4008D": {
             "name": "臂去上料位取料",
@@ -880,34 +927,37 @@
             "d_addr": 143,
             "search_points": [],
             "groups_meta": {
-                "points": "普通点位"
-            }
-        },
-        "0X40090": {
-            "name": "臂缓存位取料",
-            "type": "standard",
-            "points": [
+                "points": "普通点位",
+                "exists_or_not": "有无检测"
+            },
+            "exists_or_not": [
                 {
                     "name": "Teach_P1",
                     "coords": [
-                        964.25,
-                        -4.68,
-                        0.0,
-                        -59.51
+                        610.44,
+                        200.93,
+                        500.12,
+                        -94.86
                     ],
-                    "photo": 0,
+                    "photo": 1,
                     "config": "elbow_up"
-                },
+                }
+            ]
+        },
+        "0X40090": {
+            "name": "臂去放料位拍照",
+            "type": "standard",
+            "points": [
                 {
                     "name": "Teach_P2",
                     "coords": [
-                        965.8,
-                        -5.52,
-                        30.0,
-                        -59.51
+                        1.27,
+                        -1378.7,
+                        638.28,
+                        89.39
                     ],
-                    "photo": 0,
-                    "config": "elbow_up"
+                    "photo": 1,
+                    "config": "elbow_down"
                 }
             ],
             "d_addr": 144,
@@ -916,43 +966,9 @@
             }
         },
         "0X40091": {
-            "name": "臂去放料位拍照",
+            "name": "臂去缓存位取料",
             "type": "standard",
-            "points": [
-                {
-                    "name": "Teach_P1",
-                    "coords": [
-                        1004.78,
-                        -883.94,
-                        20.0,
-                        0.4
-                    ],
-                    "photo": 0,
-                    "config": "elbow_up"
-                },
-                {
-                    "name": "Teach_P2",
-                    "coords": [
-                        138.83,
-                        -997.17,
-                        20.0,
-                        58.0
-                    ],
-                    "photo": 0,
-                    "config": "elbow_down"
-                },
-                {
-                    "name": "Teach_P3",
-                    "coords": [
-                        86.02,
-                        -1003.11,
-                        0.0,
-                        58.0
-                    ],
-                    "photo": 0,
-                    "config": "elbow_down"
-                }
-            ],
+            "points": [],
             "d_addr": 145,
             "groups_meta": {
                 "points": "普通点位"
@@ -963,12 +979,12 @@
             "type": "standard",
             "points": [
                 {
-                    "name": "Teach_P2",
+                    "name": "Teach_P1",
                     "coords": [
-                        -177.51,
-                        -1368.34,
-                        547.63,
-                        95.9
+                        -146.1,
+                        -1370.65,
+                        565.3,
+                        93.65
                     ],
                     "photo": 0,
                     "config": "elbow_down"

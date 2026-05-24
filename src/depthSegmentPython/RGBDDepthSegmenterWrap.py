@@ -12,13 +12,14 @@ from src.utils import logger
 
 # ===================== 常量定义 =====================
 class SortRule:
-    SORT_BY_Y_DESC = 0    # 按Y降序 → 从ROI底部向上扫描，找第一个水平直线 ✅核心联动
-    SORT_BY_Y_ASC = 1     # 按Y升序 → 从ROI顶部向下扫描，找第一个水平直线 ✅核心联动
-    SORT_BY_X_DESC = 2
-    SORT_BY_X_ASC = 3
-    SORT_BY_AREA_DESC = 4
-    SORT_BY_DEPTH_ASC = 5
-    SORT_BY_ID_ASC = 6
+    SORT_BY_Y_DESC = 0    # 按Y降序 → 从ROI底部向上扫描，找第一个水平直线
+    SORT_BY_Y_ASC = 1     # 按Y升序 → 从ROI顶部向下扫描，找第一个水平直线
+    SORT_BY_X_DESC = 2    # 按x降序
+    SORT_BY_X_ASC = 3     # 按x升序
+    SORT_BY_Y_DESC_TO_CENTER = 4 #按Y降序从外侧向中心
+    SORT_BY_Y_ASC_TO_CENTER = 5 #按Y升序从外侧向中心
+    SORT_BY_Y_DESC_FROM_CENTER = 6 #按Y降序从中心向外侧
+    SORT_BY_Y_ASC_FROM_CENTER = 6 #按Y升序从中心向外侧
 
 class PType:
     MATERIAL_CHECK = 1
@@ -80,7 +81,8 @@ class RGBDDetector:
         self.end_depth_min = 400
         self.end_depth_max = 450
         self.end_depth_thresh = 10          # Canny阈值
-        self.end_min_length = 10           # 最小线段长度（像素）- 端面边缘较短
+        self.end_min_length = 10           # 最小线段长度（像素）
+        self.end_max_length = 100           # 最大线段长度（像素）
         self.end_edge_index = 0             # 返回第几个边缘
         self.end_offset_x = 0               # X方向抓取偏移
         self.end_offset_y = 0               # Y方向抓取偏移
@@ -297,6 +299,7 @@ class RGBDDetector:
             self.end_depth_max = cfg.get("end_depth_max", 450)
             self.end_depth_thresh = cfg.get("end_depth_thresh", 10)
             self.end_min_length = cfg.get("end_min_length", 10)
+            self.end_max_length = cfg.get("end_max_length", 100)
             self.end_edge_index = cfg.get("end_edge_index", 0)
             self.end_offset_x = cfg.get("end_offset_x", 0)
             self.end_offset_y = cfg.get("end_offset_y", 0)
@@ -372,8 +375,8 @@ class RGBDDetector:
             self.unload_item_width = cfg.get("unload_item_width", 100)
             self.unload_item_height = cfg.get("unload_item_height", 100)
 
-            self.unload_item_interval = cfg.get("unlunload_item_intervaload_start_x", 25)
-            self.unload_layer_thickness= cfg.get("unload_layer_depth", 100)
+            self.unload_item_interval = cfg.get("unload_item_interval", 25)
+            self.unload_layer_thickness= cfg.get("unload_layer_thickness", 100)
             self.unload_item_count_per_layer = cfg.get("unload_item_count_per_layer", 5)
             self.unload_layer_count = cfg.get("unload_layer_count", 6)
             self.unload_depth_threshold = cfg.get("unload_depth_threshold", 15)
@@ -2358,9 +2361,9 @@ class RGBDDetector:
     # 模块：从边缘图提取水平线段（基于轮廓，适用于短边缘）
     # ==============================================================
     def _extract_horizontal_lines_from_contours(self, edges, roi_x_start, roi_y_start, 
-                                                  min_width=10, min_height=10, 
-                                                  max_height=500, min_aspect_ratio=3.0,
-                                                  dilate_iterations=0):
+                                                  min_width=10, max_width=100, 
+                                                  min_height=10, max_height=500, 
+                                                  min_aspect_ratio=3.0, dilate_iterations=0):
         """
         从边缘图中通过轮廓检测提取水平线段（适用于短边缘）
         
@@ -2407,7 +2410,7 @@ class RGBDDetector:
             x, y, w, h = cv2.boundingRect(contour)
             
             # 筛选条件
-            if w < min_width:
+            if w < min_width or w > max_width:
                 continue
             if h < min_height: # or h > max_height:
                 continue
@@ -2664,6 +2667,7 @@ class RGBDDetector:
             edges_combined, 
             roi_x_start, roi_y_start,
             min_width=self.end_min_length,
+            max_width=self.end_max_length,
             min_height=20,                      # 最小高度3像素
             max_height=500                     # 最大高度500像素
         )
@@ -2930,8 +2934,8 @@ class RGBDDetector:
         
         # 过滤无效深度值
         valid_depth_mask = (roi_depth != self.depth_invalid) & \
-                           (roi_depth >= self.feed_depth_min) & \
-                           (roi_depth <= self.feed_depth_max)
+                           (roi_depth >= self.material_depth_min) & \
+                           (roi_depth <= self.material_depth_max)
         valid_depth_values = roi_depth[valid_depth_mask]
         
         if len(valid_depth_values) > 0:
@@ -3017,7 +3021,7 @@ class RGBDDetector:
         
         # 4. 生成所有理论位置并判断状态
         all_positions = []  # 所有位置，按层和位置索引存储
-        
+        layer_positions = []
         print("\n--- 计算所有位置并分析状态 ---")
         
         for layer_idx in range(layer_count):
@@ -3069,7 +3073,8 @@ class RGBDDetector:
                         # depth_diff = abs(actual_depth - layer_z_mm)
                         # if depth_diff <= depth_tolerance and valid_ratio > 0.3:
                         depth_diff = actual_depth - layer_z_mm
-                        if depth_diff < 0 and depth_diff > -layer_thickness_mm and valid_ratio > 0.3:
+                        diff_thresh = layer_thickness_mm + 10 #设备不够水平，增加10mm容差
+                        if depth_diff < 0  and valid_ratio > 0.1:
                             has_product = True
                             print(f"  P{pos_idx}: 有产品 (实际深度={actual_depth:.1f}mm, 理论={layer_z_mm:.1f}mm)")
                         else:
@@ -3093,6 +3098,18 @@ class RGBDDetector:
                 }
                 all_positions.append(position_info)
         
+        # 按 position_idx 分组，每组内按 layer_idx 排序（从上层到下层）
+        from itertools import groupby
+        all_positions.sort(key=lambda x: (x["position_idx"], x["layer_idx"]))
+        for pos_idx, group in groupby(all_positions, key=lambda x: x["position_idx"]):
+            group_list = list(group)
+            # 从上往下传播
+            has = False
+            for p in group_list:
+                if p["has_product"] or has:
+                    has = True
+                    p["has_product"] = True
+
         # 5. 找出所有空位
         empty_positions = [p for p in all_positions if not p["has_product"]]
         
