@@ -1344,68 +1344,19 @@ class Controller(QThread):
             # 到这里说明 res_status == "ok"
             logger.info(f"视觉执行成功, 返回原始坐标 {coords}")
 
-            """
-            ##########################################
-            # 相机逼近运动到合适的距离，让 相机中心 对准物料，且高度保持在设定值
-            ##########################################
-            
-            target_relative = coords[0]
-            current_dist = target_relative[2]
-            logger.info(f"当前相机距离物料高度: {current_dist:.1f} mm (阈值: {const.PRECISE_PHOTO_DISTANCE})")
+            # # =======================================================
+            # # 【核心新增】：下料区放垫木判定拦截
+            # # =======================================================
+            # if photo_type == const.photo_type_unloading and item_index == 0:
+            #     physical_layer = (const.product_total_layers - 1) - layer
+            #     if physical_layer == 0: # 第0层，料架自带垫木了，不需要提示
+            #         pass
+            #     else:
+            #         # 阻塞在这里，直到工人放好木条并复位
+            #         if not self._handle_wood_stick_placement():
+            #             # 如果返回 False，说明被急停打断，直接退出
+            #             return False
 
-            # 判断是否需要逼近拍照
-            if current_dist > const.PRECISE_PHOTO_DISTANCE + 20.0:  # 加10mm容差防止反复跳
-                logger.info(f"距离过远，执行相机中心逼近...")
-                # 计算一个目标点：让相机对准物料，且高度为 400
-
-                # Z轴补偿计算
-                # 目标：让相机距离物体 400mm
-                # 公式：Target_Z = Curr_Z - (zc - 400)
-                # 这等同于在 compute_gripper_target 中传入 z_diff = 400
-                z_target_diff = const.PRECISE_PHOTO_DISTANCE
-                approach_coord = self.transform_tool_coord(target_relative, align_camera=1, align_z_diff=z_target_diff)
-                if not approach_coord:
-                    logger.error("逼近点逆解失败")
-                    return "ERROR"
-
-                # 构建坐标
-                approach_pt = {
-                    "name": f"Vision_Approach_{loop_count}",
-                    "coords": approach_coord,
-                    "photo": 0,   # 移动到位后，通过循环再次触发拍照，不要在这里设1
-                    "config": config
-                }
-                logger.info(f"逼近坐标: {approach_pt}")
-                # 为了安全，可以限制一下最小Z值 (防止视觉算出负数撞地)
-                if approach_pt["coords"][2] < -440.0:
-                    logger.warning(f"逼近高度过低 ({approach_pt['coords'][2]}), 强制限位")
-                    approach_pt["coords"][2] = -440.0
-
-                # 移动到新位置
-                if not self._move_segment_to_target(process_addr, target_point=approach_pt):
-                    return "ERROR" # 移动失败(比如急停)
-
-                # 移动完成后，进入下一次循环，重新拍照
-                # time.sleep(0.1)
-                continue
-            """
-
-            # =======================================================
-            # 【核心新增】：下料区放垫木判定拦截
-            # =======================================================
-            if photo_type == const.photo_type_unloading and item_index == 0:
-                physical_layer = (const.product_total_layers - 1) - layer
-                if physical_layer == 0: # 第0层，已经有垫木了，不需要提示
-                    pass
-                else:
-                    # # 阻塞在这里，直到工人放好木条并复位
-                    # if not self._handle_wood_stick_placement():
-                    #     # 如果返回 False，说明被急停打断，直接退出
-                    #     return False
-
-                    pass
-
-            # === 距离合适 (<= 400)，计算最终抓取坐标并保存 ===
             transform_coords = []
             for coord in coords:
                 if photo_type == const.photo_type_find_head:
@@ -2394,108 +2345,178 @@ class Controller(QThread):
         found_layer_idx = -1
         target_material_base_coord = None  # 直接存放唯一的目标基座标
 
+        total_layers = len(head_points)
+        layer_idx = start_layer
+
         # === 外层循环：逐层寻找端头 ===
-        for layer_idx in range(start_layer, len(head_points)):
+        while layer_idx < total_layers:
             if self.check_estop(): return False
+            if not self.running: return False
 
             head_pt = head_points[layer_idx]
             logger.info(f"---> 前往第 {layer_idx} 层端头群拍点: {head_pt.get('name')} <---")
 
-            while self.running:
-                if self.check_estop(): return False
+            # 1. 移动到端头拍照点
+            if not self._move_segment_to_target(process_addr, target_point=head_pt):
+                return False
 
-                # 1. 移动到端头拍照点
-                if not self._move_segment_to_target(process_addr, target_point=head_pt):
+            # 2. 触发端头群拍 (ptype=5: 找端头模式，不转换夹爪坐标)
+            vision_res = self.handle_vision_recursive_v1(process_addr, head_pt, loading,
+                                                         photo_type=const.photo_type_find_head)
+
+            # ==========================================
+            # 分支 1：找到物料 (OK)
+            # ==========================================
+            if vision_res == "OK":
+                p_head_data = self.get_vision_data(process_addr, photo_type=const.photo_type_find_head)
+                logger.info(f"head_data: {p_head_data}")
+                if p_head_data and len(p_head_data) > 0:
+                    # logger.info(f"第 {layer_idx} 层端头发现 {len(p_head_data)} 根物料！")
+                    base_coord = p_head_data[0]
+                    logger.info(f"第 {layer_idx} 层端头锁定目标物料坐标: {base_coord}")
+
+                    # # 将相机相对坐标转换为法兰基座标系绝对坐标
+                    # for raw_coord in p_head_data:
+                    #     # align_camera=True 表示让相机镜头对准端头，而不是夹爪
+                    #     base_coord = self.transform_tool_coord(raw_coord, align_camera=1)
+                    #     if base_coord:
+                    #         valid_materials_base_coords.append(base_coord)
+
+                    target_material_base_coord = base_coord
+                    found_layer_idx = layer_idx
+                    # 保存层数记忆 (因为每次都重新拍整层，所以只记层数即可)
+                    self.loading_index.current_head_layer_index = layer_idx
+                    self.loading_index.save_search_index(const.head_layer_index_name, layer_idx)
+                    break  # 跳出 while 重试循环
+                else:
+                    logger.error("视觉返回OK，但无法获取端头坐标数据")
+                    # 数据异常，视为 NG 处理
+                    vision_res = "ERROR"
+
+            # ==========================================
+            # 分支 2：空视野 (EMPTY) -> 处理垫木或空车
+            # ==========================================
+            if vision_res == "EMPTY":
+                # 检查这一层是否是刚刚被我们抓空的
+                if layer_idx == self.loading_index.last_picked_layer:
+                    logger.info(f"第 {layer_idx} 层刚刚被抓空，露出垫木！")
+
+                    # 判断当前层是否是料架的 "最底层"
+                    is_bottom_layer = (layer_idx == len(head_points) - 1)
+
+                    if is_bottom_layer:
+                        # ---------------------------------------------
+                        # 情景 A: 最底层抓空 -> 整车全空
+                        # ---------------------------------------------
+                        logger.critical(f"最底层 (第 {layer_idx} 层) 已被抓空，整车物料全部抓完！")
+
+                        # 发送 21 (空料车报警)
+                        self.plc.write_register(process_addr, 21)
+                        logger.info(f"发送空料车报警 (21)，准备撤离至安全点...")
+
+                        # 移动到最高处安全点 (通常是第0层端头点，或读取 empty_points)
+                        empty_pts_cfg = self.cfg_manager.get_process_config(hex(process_addr).upper()).get(
+                            "empty_points", [])
+                        safe_pt = empty_pts_cfg[0] if empty_pts_cfg else head_points[0]
+
+                        if not self._move_segment_to_target(process_addr, target_point=safe_pt):
+                            return False
+
+                        logger.info("已到达安全点，阻塞死等人工推入新料车并按下复位(20)...")
+                        if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+                            logger.info("收到复位信号 20，准备重新开始找料")
+                            # 重置所有记忆
+                            self.loading_index.current_head_layer_index = 0
+                            self.loading_index.reset_search_index(const.head_layer_index_name, 0)
+                            # 重置抓取记录
+                            self.loading_index.last_picked_layer = -1
+                            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+
+                            # 回退 layer_idx，重新从最高层开始扫描
+                            layer_idx = 0
+                            continue  # 直接进入下一轮 while 循环
+                        else:
+                            return False  # 急停打断
+                    else:
+                        # # 挂起死等人工取垫木
+                        # if not self._handle_wood_stick_removal(process_addr, layer_idx):
+                        #     return False  # 急停打断
+                        #
+                        # # 人工取走垫木，按复位恢复后，清除标志位，避免重复报警
+                        # # self.last_picked_layer = -1
+                        # self.loading_index.last_picked_layer = -1
+                        # self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+
+                        # ---------------------------------------------
+                        # 情景 B: 普通层抓空 -> 提示取垫木
+                        # ---------------------------------------------
+                        logger.info(f"挂起死等人工取走第 {layer_idx} 层垫木...")
+
+                        # 触发 UI 提示 (如果在别处有绑定信号的话)
+                        self.sig_wood_stick_alarm.emit(layer_idx)
+
+                        # 发送 22 (取垫木报警)
+                        self.plc.write_register(process_addr, 22)
+
+                        logger.info("阻塞死等人工取垫木并按下复位(20)...")
+                        if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+                            logger.info("收到复位信号 20，垫木已移除")
+                            # 清除上次抓取标志
+                            self.loading_index.last_picked_layer = -1
+                            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+
+                            # 层数加1，进入下一层
+                            layer_idx += 1
+                            continue  # 进入下一轮 while 循环
+                        else:
+                            return False  # 急停打断
+
+                        logger.info(f"第 {layer_idx} 层垫木已移除，准备下探到新楼层...")
+                else:
+                    # 只是路过空层 (比如刚开机前两层就是空的)
+                    # 不是刚刚抓空的层，只是路过空层 (比如开机时上两层是空的)
+                    logger.info(f"第 {layer_idx} 层视野无料 (路过跳过)，准备下探...")
+                    layer_idx += 1
+                    continue
+
+            # ==========================================
+            # 分支 3：真异常 (ERROR)
+            # ==========================================
+            if vision_res == "ERROR":
+                self.plc.write_register(process_addr, 16)
+                logger.warning("端头视觉异常 (16)，等待复位 (20)...")
+                if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                    continue
+                else:
                     return False
 
-                # 2. 触发端头群拍 (ptype=5: 找端头模式，不转换夹爪坐标)
-                vision_res = self.handle_vision_recursive_v1(process_addr, head_pt, loading,
-                                                             photo_type=const.photo_type_find_head)
-
-                if vision_res == "OK":
-                    p_head_data = self.get_vision_data(process_addr, photo_type=const.photo_type_find_head)
-                    logger.info(f"head_data: {p_head_data}")
-                    if p_head_data and len(p_head_data) > 0:
-                        # logger.info(f"第 {layer_idx} 层端头发现 {len(p_head_data)} 根物料！")
-                        base_coord = p_head_data[0]
-                        logger.info(f"第 {layer_idx} 层端头锁定目标物料坐标: {base_coord}")
-
-                        # # 将相机相对坐标转换为法兰基座标系绝对坐标
-                        # for raw_coord in p_head_data:
-                        #     # align_camera=True 表示让相机镜头对准端头，而不是夹爪
-                        #     base_coord = self.transform_tool_coord(raw_coord, align_camera=1)
-                        #     if base_coord:
-                        #         valid_materials_base_coords.append(base_coord)
-
-                        target_material_base_coord = base_coord
-                        found_layer_idx = layer_idx
-                        # 保存层数记忆 (因为每次都重新拍整层，所以只记层数即可)
-                        self.loading_index.current_head_layer_index = layer_idx
-                        self.loading_index.save_search_index(const.head_layer_index_name, layer_idx)
-                        break  # 跳出 while 重试循环
-                    else:
-                        logger.error("视觉返回OK，但无法获取端头坐标数据")
-
-                elif vision_res == "EMPTY":
-
-                    # 检查这一层是否是刚刚被我们抓空的
-                    # if layer_idx == getattr(self, 'last_picked_layer', -1):
-                    if layer_idx == self.loading_index.last_picked_layer:
-                        logger.info(f"第 {layer_idx} 层刚刚被抓空，露出垫木！")
-
-                        # 判断当前层是否是料架的 "最底层"
-                        is_bottom_layer = (layer_idx == len(head_points) - 1)
-                        if is_bottom_layer:
-                            logger.critical(f"最底层 (第 {layer_idx} 层) 已被抓空，整车物料全部抓完！")
-                            # 重置各种标志位，准备迎接新料车
-                            self.loading_index.current_head_layer_index = 0
-                            self.loading_index.reset_search_index(const.head_layer_index_name)
-
-                            # 料架全空换新车时，重置抓取记录
-                            self.loading_index.last_picked_layer = -1
-                            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
-
-                            # 直接触发空料车报警逻辑，退出当前执行引擎
-                            return self._handle_empty_rack_and_wait(process_addr)
-                        else:
-                            # 挂起死等人工取垫木
-                            if not self._handle_wood_stick_removal(process_addr, layer_idx):
-                                return False  # 急停打断
-
-                            # 人工取走垫木，按复位恢复后，清除标志位，避免重复报警
-                            # self.last_picked_layer = -1
-                            self.loading_index.last_picked_layer = -1
-                            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
-
-                            logger.info(f"第 {layer_idx} 层垫木已移除，准备下探到新楼层...")
-                    else:
-                        # 只是路过空层 (比如刚开机前两层就是空的)
-                        logger.info(f"第 {layer_idx} 层视野无料 (跳过空层)，准备下探...")
-
-                    break  # 跳出 while，执行外层 for 的下一层
-
-                else:  # "ERROR"
-                    self.plc.write_register(process_addr, 16)
-                    logger.warning("端头视觉异常 (16)，等待复位 (20)...")
-                    if self.wait_for_plc_val(process_addr, 20, timeout=7200):
-                        continue
-                    else:
-                        return False
-
-            # 如果在这一层找到了料，跳出下探循环
-            if found_layer_idx != -1:
-                break
-
+        # =======================================================
+        # 异常退出保护：如果上面的 while 循环走完了但没找到料
+        # =======================================================
         if found_layer_idx == -1:
-            # 7 层全空，执行报警与复位逻辑
-            self.loading_index.current_head_layer_index = 0
-            self.loading_index.reset_search_index(const.head_layer_index_name)
+            # 走到这里通常是因为直接从配置或者记忆读取了一个错误的超限索引，或者7层全空跳过了。
+            # 为了防止死锁，直接发空车报警，并重置回0
+            logger.critical("所有层遍历完毕仍未找到端头，强制触发空料车报警！")
 
-            # 料架全空换新车时，重置抓取记录
-            self.loading_index.last_picked_layer = -1
-            self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+            self.plc.write_register(process_addr, 21)
+            empty_pts_cfg = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("empty_points", [])
+            safe_pt = empty_pts_cfg[0] if empty_pts_cfg else head_points[0]
+            self._move_segment_to_target(process_addr, target_point=safe_pt)
 
-            return self._handle_empty_rack_and_wait(process_addr)
+            if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+
+                self.loading_index.current_head_layer_index = 0
+                self.loading_index.reset_search_index(const.head_layer_index_name)
+
+                # 料架全空换新车时，重置抓取记录
+                self.loading_index.last_picked_layer = -1
+                self.loading_index.reset_search_index(const.last_picked_layer_name, -1)
+
+                # 由于这已经是最外层的保护了，不方便直接重新开始循环，
+                # 返回 False 让外层 loop_once 重新拉起是最安全的。
+                return False
+
+            return False
 
         # =======================================================
         # 阶段 2：直接依据视觉 X 生成精拍点
@@ -3387,7 +3408,7 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 臂去放料位拍照
+    # 缓存检测去放料位拍照
     def handle_process_0x40090(self, process_addr, value):
         if value != 10:
             return
@@ -3395,8 +3416,8 @@ class Controller(QThread):
         logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去放料位拍照")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
-        last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40090/262288
-        last_process_points = self.cfg_manager.get_process_config(hex(last_process_addr).upper()).get("points")
+        # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40090/262288
+        # last_process_points = self.cfg_manager.get_process_config(hex(last_process_addr).upper()).get("points")
         # 取最后一个点的坐标，作为当前流程的起始坐标
         # process_start_point = last_process_points[-1]
 
@@ -3404,10 +3425,12 @@ class Controller(QThread):
         process_start_point = self.get_realtime_point()
 
         points = [process_start_point]
-        # 2. 构建点位列表 [Origin, P1, P2...]
+        # 构建点位列表 [Origin, P1, P2...]
         logger.info(f"process address: {process_addr} : {process_start_point['name']}")
 
-        # 获取配置点
+        # =======================================================
+        # 1. 提取所有过渡点和最终的拍照点
+        # =======================================================
         process_points = self.cfg_manager.get_process_config(hex(process_addr).upper()).get("points", [])
         if not points:
             logger.error("未找到点位配置")
@@ -3417,10 +3440,102 @@ class Controller(QThread):
 
         logger.info(f"point list: {points}")
 
-        # 执行运动控制
-        self.execute_standard_motion_sequence(process_addr, points, photo_type=const.photo_type_unloading)
+        # 最后一个点就是高空拍照点
+        unloading_photo_pt = points[-1]
 
-        # ============================================
+        # 临时屏蔽这条路径上的所有拍照触发标志, 防止底层引擎擅自调用通用视觉
+        for pt in points:
+            pt["photo"] = 0
+
+        # =======================================================
+        # 2. 安全移动到高空拍照点
+        # =======================================================
+        logger.info(f"开始前往下料全局拍照点，执行 {len(points) - 1} 段避障轨迹...")
+        success = self.execute_standard_motion_sequence(
+            process_addr,
+            points,
+            photo_type=const.photo_type_unloading,
+            send_done=False
+        )
+
+        if not success:
+            logger.error("前往下料拍照点失败或被急停中断，流程终止！")
+            return
+
+        # =======================================================
+        # 3. 【专属业务状态机】：死循环拍照判定，直到拿到合法位置
+        # =======================================================
+        target_layer = -1
+        target_index = -1
+        target_coords = []
+
+        while self.running:
+            if self.check_estop(): return
+
+            logger.info("已到达拍照位，执行下料区全局拍照识别...")
+
+            # 手动调用 take_photo_position
+            vision_res = self.take_photo_position(
+                unloading_photo_pt.get("coords"),
+                config=unloading_photo_pt.get("config", "elbow_down"),
+                ptype=const.photo_type_unloading
+            )
+
+            res_status = vision_res.get("res")
+            coords = vision_res.get("coords", [])
+            layer = vision_res.get("layer", -1)
+            index = vision_res.get("position", -1)
+
+            # --- 异常 1: 无下料架 ---
+            if layer == 10000:
+                self.plc.write_register(process_addr, 21)
+                logger.warning("未检测到下料架 (发21)，等待人工推入并复位(20)...")
+                if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+                    logger.info("收到复位20，重新拍照判定...")
+                    continue
+                return
+
+            # --- 异常 2: 满料 ---
+            if layer == 10001:
+                self.plc.write_register(process_addr, 23)
+                logger.warning("下料架已满 (发23)，等待人工拉走换车并复位(20)...")
+                if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+                    logger.info("收到复位20，重新拍照判定...")
+                    continue
+                return
+
+            # --- 异常 3: 需要放垫木 --- 排除物理层0层
+            physical_layer = (const.product_total_layers - 1) - layer
+
+            if index == 0 and physical_layer != 0:
+                self.plc.write_register(process_addr, 22)
+                logger.warning(f"新的一层(层号:{layer})，需要放置垫木 (发22)，等待复位(20)...")
+                if self.wait_for_plc_val(process_addr, 20, timeout=-1):
+                    logger.info("收到复位20，重新拍照判定...")
+                    continue
+                return
+
+            # --- 真异常: 相机断线或算法崩溃 ---
+            if res_status != "ok" or layer < 0 or index < 0:
+                self.plc.write_register(process_addr, 16)
+                logger.error("视觉识别失败或返回数据异常 (发16)，等待复位(20)...")
+                if self.wait_for_plc_val(process_addr, 20, timeout=7200):
+                    continue
+                return
+
+            target_layer = layer
+            target_index = index
+            target_coords = coords
+            logger.info(f"视觉判定成功，分配空位：第 {target_layer} 层，第 {target_index} 列")
+
+            break
+            # ============================================
+
+        # 保存数据，供放料逻辑调用
+        self.save_vision_data(process_addr, target_coords, photo_type=const.photo_type_unloading, layer=target_layer,
+                              index=target_index)
+
+        self.plc.write_register(process_addr, 13)
         # 动作全部成功完成后，更新全局记录
         # 将当前动作的最后一个点，标记为下一次动作的起点
         self.last_motion_end_point = points[-1]
@@ -3512,9 +3627,9 @@ class Controller(QThread):
             self.l1, self.l2, self.z0, self.nn3,
             elbow_config=config_curr
         )
-        # if not j4:
-        #     logger.info(f"关节4逆解失败")
-        #     return
+        if not j4:
+            logger.info(f"关节4逆解失败")
+            return
 
         final_unload_target = {
             "name": f"Unload_L{layer}_I{index}",

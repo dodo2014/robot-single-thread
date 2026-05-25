@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QTreeWidget, QTreeWidgetItem, QFrame, QDialog, QDialogButtonBox)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from src.utils.config_manager import CONFIG_FILE
-
+from src.core.kinematics import ScaraKinematics
 
 class GroupInputDialog(QDialog):
     """自定义对话框：用于同时输入分组名称和 JSON Key"""
@@ -1380,6 +1380,14 @@ class ConfigEditorUI(QMainWindow):
 
     def save_current_process(self):
         """保存 Tab 2 的表格数据到 json"""
+
+        robot_params = self.config_data.get('robot_params', {})
+        l1 = robot_params.get('l1', 0)
+        l2 = robot_params.get('l2', 0)
+        z0 = robot_params.get('z0', 0)
+        nn3 = robot_params.get('nn3', 0)
+
+
         current_item = self.tree_processes.currentItem()
         if not current_item:
             return
@@ -1433,6 +1441,18 @@ class ConfigEditorUI(QMainWindow):
                 # 提取表格里的实际点位数据 (复用你现有的辅助函数)
                 points_list = self._extract_points_from_table(table)
 
+                for pt in points_list:
+                    coords = pt.get('coords', [0, 0, 0, 0])
+                    config_type = pt.get('config', 'elbow_up')
+                    ik = ScaraKinematics.inverse_kinematics_v2(
+                        coords[0], coords[1], coords[2], coords[3],
+                        l1, l2, z0, nn3,
+                        config_type=config_type
+                    )
+                    if ik:
+                        pt['joints'] = [ik['the1'], ik['the2'], ik['the3'], ik['th4']]
+                    else:
+                        pt['joints'] = []  # 逆解失败，标记为空
                 # 将点位数组直接存入 config_data 对应的 key 下
                 self.config_data['processes'][pid][json_key] = points_list
 
