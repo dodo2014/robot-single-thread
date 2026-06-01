@@ -49,6 +49,9 @@ class DetectAlgoService:
         self.alive_thread = threading.Thread(target=self._keep_alive_worker, daemon=True)
         self.alive_thread.start()
 
+        self.init_connect()
+
+    def init_connect(self):
         # 初始化相机并预热
         logger.info("Initializing camera hardware...")
         try:
@@ -86,19 +89,49 @@ class DetectAlgoService:
             attempt += 1
         logger.info(f"Camera warm-up complete (got {warmed} valid frames in {attempt} attempts).")
 
+    def reboot_camera(self):
+        """
+        供上位机主动调用的相机热重启接口 (不影响后台线程)
+        常用于一个加工周期结束后，主动刷新 USB 链路，防止待机假死。
+        """
+        logger.info(">>> 主动触发相机硬件热重启 (Proactive Reboot) <<<")
+        try:
+            # 1. 安全断开底层句柄
+            self.device.disconnect()
+
+            # 2. 给操作系统 USB 驱动释放资源的喘息时间
+            time.sleep(1.0)
+
+            # 3. 重新连接
+            success, msg = self.device.connect()
+            if success:
+                logger.info("相机热重启成功，执行预热...")
+                self._warm_up()
+                return True
+            else:
+                logger.error(f"相机热重启失败: {msg}。将在下次调用时重试。")
+                return False
+
+        except Exception as e:
+            logger.error(f"相机热重启时发生异常: {e}")
+            return False
+
     def _keep_alive_worker(self):
         while not self.stop_event.is_set():
-            # logger.info(f"keep camera alive worker...")
+            logger.info(f"Camera keep alive worker...")
             try:
-                ret, color, depth = self.device.get_frames()
-                if ret:
-                    del color
-                    del depth
+                # 拔掉瞬间直接去取图会导致底层的 wait_for_frames 直接崩溃
+                if self.device.is_alive():
+                    ret, color, depth = self.device.get_frames()
+                    if ret:
+                        logger.info(f"Camera keep alive worker, get frames ...")
+                        del color
+                        del depth
             except Exception as e:
                 logger.info(f"keep_alive_worker error: {e} \n {traceback.format_exc()}")
                 pass
 
-            time.sleep(15)
+            time.sleep(60)
 
 
     def _save_worker(self):
@@ -196,7 +229,8 @@ class DetectAlgoService:
             success, color_frame, depth_frame = self.device.get_frames(timeout_ms=2000)
             if not success:
                 last_err = "Failed to capture frames"
-                time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
+                # time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
+                time.sleep(0.1)  # 等待约一帧的时间 (10fps的周期)
                 # 只有当连续多次（例如超过3次）都拿不到图时，才真正去重启相机
                 if attempt >= 2:
                     logger.warning("Multiple consecutive frame drops, re-initializing pipeline...")
@@ -481,6 +515,8 @@ def main():
         end_time = round(time.time() * 1000)
         print(f"Detection Time: {end_time - start_time}")
         detector_logger.info(f"Detection Time: {end_time - start_time}")
+    except Exception as e:
+        logger.info(f"Detection Failed: {e}")
 
     finally:
         service.shutdown()

@@ -3733,17 +3733,10 @@ class Controller(QThread):
         # 步骤 1: 确定关键点
         # ==========================================
 
-        # 1.1 起点 (Current): 抓取位 P3
-        # 理论上是 self.last_motion_end_point。
-        # 为了绝对安全，强烈建议这里读取一次实时坐标！防止PLC夹紧过程中机械臂有微动。放料之后，返回中间点PO的过程中，可能要加偏移坐标
         start_point = self.get_realtime_point()
 
         safe_point = copy.deepcopy(start_point)
         safe_point["coords"][2] = const.unloading_safe_z
-
-        ###############################################
-        # 以start_point为基准base点，添加偏移offset坐标
-        ###############################################
 
         # 1.3 终点序列 (Target): 放料位配置
         # 读取动作 (0x40093) 自己的配置
@@ -3773,13 +3766,16 @@ class Controller(QThread):
         self.last_motion_end_point = full_sequence[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
+        # ==========================================
+        # 5: 周期结束，主动执行相机预防性重启
+        # ==========================================
+        if self.vision_service:
+            # 直接调用专用的硬件重启接口，不影响后台线程
+            self.vision_service.reboot_camera()
+
     # 逻辑判断，10：请求判断  11：物料未加工完成,还有剩余物料  12：加工结束，所有的物料都加工结束；13：取垫木；14：取垫木结束
     def handle_process_0x40094(self, process_addr, value):
-        if value != 10:
-            return
-
-        status = self.get_vision_status()
-        self.plc.write_register(process_addr, status)
+        pass
 
     def handle_process_0x40095(self, process_addr, value):
         #
