@@ -156,8 +156,11 @@ class ScaraKinematics:
             r_sq = xe ** 2 + ye ** 2
             r = math.sqrt(r_sq)
 
+            logger.info(f"目标距离：{r}")
+            logger.info(f"允许范围：{(l1 + l2) + 0.001}")
             # 允许微小的浮点误差 (epsilon)
-            if r > (l1 + l2) + 0.001:
+            r_floor = math.floor(r * 100) / 100
+            if r_floor > (l1 + l2) + 0.001:
                 error_msg = f"目标点超出工作空间! 目标距离: {r:.2f}, 最大臂展: {l1 + l2}"
                 logger.error(error_msg)
                 return None  # 或者 raise Exception(error_msg)

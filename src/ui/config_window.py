@@ -1198,7 +1198,9 @@ class ConfigEditorUI(QMainWindow):
 
         # 更新提示文本
         self.lbl_wood_msg.setText(
-            f"上层物料已抓空！\n\n请取走第 {layer_idx + 1} 层的垫木！\n\n(完成后请按下机台【复位】按钮)")
+            # f"上料架上层物料已抓空！\n\n请取走第 {layer_idx + 1} 层的垫木！\n\n(完成后请按下机台【复位】按钮)"
+            f"上料架上层物料已抓空！\n\n请取走垫木！\n\n(完成后请按下机台【复位】按钮)"
+        )
         self.wood_stick_dialog.show()
 
     def close_wood_stick_dialog(self):

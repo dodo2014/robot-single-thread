@@ -64,8 +64,8 @@ VAL_RESUME_REQ = 11  # 恢复请求
 VAL_RESET = 0  # 复位/空闲
 
 # 机械臂J1活动范围
-J1_LIMIT_MAX = 98
-J1_LIMIT_MIN = -105
+J1_LIMIT_MAX = 105
+J1_LIMIT_MIN = -102
 
 # 机械臂 J2 活动范围
 J2_LIMIT_MAX = 162
@@ -138,34 +138,34 @@ depth_valid_filter = 450 # 相机距离物料的拍摄高度420mm，漂移会增
 product_per_layer = 5  # 每层的物料数量
 product_total_layers = 6  # 物料的总层数
 
-product_y_offset = 985.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
+product_y_offset = 995.0  # 上料区域，端头到抓料点的偏移，即物料右侧端头偏左offset的位置
 depth_interference_x_offset = 20 # 上料区域，精拍点位，为了消除精拍之后的深度干扰，在精拍点位X+方向，增加偏移(mm)
-fine_photo_world_angle = -3.35  # 上料区域精拍点位的末端绝对角度 (度°)
+fine_photo_world_angle = -0.23  # 上料区域精拍点位的末端绝对角度 (度°)
 
-loading_forward_distance = 40 # 夹爪前移距离(mm)，用于包住物料
+loading_forward_distance = 43 # 夹爪前移距离(mm)，用于包住物料
 
 # 抓料，系统漂移+透视视差补偿
-loading_x_back = -471.94   # 后方参考 X 坐标；后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
-loading_x_front = 136.12   # 前方参考 X 坐标；
+loading_x_back = -489.39   # 后方参考 X 坐标；后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
+loading_x_front = 137.62   # 前方参考 X 坐标；
 loading_x_comp_back = 0.0 # 假设：后方料正好(能包住)，前方料因为下垂/视角放大，需要补偿 +20mm 才能包住
 loading_x_comp_front = 25  # 前方的料，需要前移x(mm)，才能包住物料
 loading_y_comp_back = 0.0 # 后方Y刚好对准(0误差)，前方Y+少了20mm(需要+20补偿)
 loading_y_comp_front = 10.0 # 前方少，需要加回去，+20; 前方多出了20mm，需要减去20mm拉回来，取值-20
 loading_r_comp_back = 0.0 # 假设后方的料，r角正好对齐物料, 0°表示对齐
-loading_r_comp_front = 4.38 # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
+loading_r_comp_front = -1.29 # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
 
-# 上料安全高度
-loading_safe_z = 600
+# 上料安全高度Z值
+loading_safe_z = 436.86
 
 # 下料区域参数
-unloading_safe_z = 600 # 下料安全高度
+unloading_safe_z = 219.25 # 下料安全高度
 # unloding_x_list = [-442, -293, -144, -5, 154] # 5个料位的绝对X坐标, 坐标差值149-150
-unloding_x_list = [-328, -179, -30, 119, 268] # 5个料位的绝对X坐标, 坐标差值149-150
+unloding_x_list = [-307, -157, -7, 143, 293] # 5个料位的绝对X坐标, 坐标差值149-150
 unloding_y = -1297    #  固定的Y坐标
-unloading_layer_0_z = -546  # 第0层的放料高度，料架+50mm厚度的垫木
+unloading_layer_0_z = -700  # 第0层的放料高度Z值
 unloading_layer_gap = product_height + interval_height  # 产品高度 + 垫木高度
 # fine_unloading_world_angle = -3.9  # 放料末端绝对角度°
-fine_unloading_world_angle = -1  # 放料末端绝对角度°
+fine_unloading_world_angle = -0.76  # 放料末端绝对角度°
 
 # 下料排序
 unloding_x_sort_asc = 1  # 下料X坐标排序，1/X从小到大排序, 2/X从大到小排序

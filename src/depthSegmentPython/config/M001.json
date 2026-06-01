@@ -38,7 +38,7 @@
 	"end_roi_x": 200,
 	"end_roi_y": 300,
 	"end_roi_w": 1000, 
-	"end_roi_h": 300,
+	"end_roi_h": 500,
 
 	//"end_depth_start": 420, //产品端面的拍摄高度
 	"end_depth_min": 400,
@@ -88,8 +88,8 @@
 	"material_roi_y": 170,             // 物料缓存台ROI左上角Y坐标（像素）
 	"material_roi_w": 500,           // 物料缓存台ROI宽度（像素）
 	"material_roi_h": 160,           // 物料缓存台ROI高度（像素）
-	"material_depth_min": 400,       // 物料存在的最小深度（mm），低于此值可能无物料
-	"material_depth_max": 470,       // 物料存在的最大深度（mm），高于此值可能无物料
+	"material_depth_min": 200,       // 物料存在的最小深度（mm），低于此值可能无物料
+	"material_depth_max": 270,       // 物料存在的最大深度（mm），高于此值可能无物料
 	
 	// ==================== YOLO铁屑检测配置 ====================
 	"yolo_roi_x": 320,               // YOLO检测ROI左上角X坐标（像素）
@@ -107,9 +107,9 @@
 	"yolo_input_h": 608,               // YOLO网络输入图像高度（像素）
 	
 	// ==================== 下料区域配置 ====================
-	"unload_roi_x": 430,               // 下料区域ROI左上角X坐标（像素）
+	"unload_roi_x": 440,               // 下料区域ROI左上角X坐标（像素）
 	"unload_roi_y": 90,                // 下料区域ROI左上角Y坐标（像素）
-	"unload_roi_w": 440,               // 下料区域ROI宽度（像素）
+	"unload_roi_w": 430,               // 下料区域ROI宽度（像素）
 	"unload_roi_h": 550,               // 下料区域ROI高度（像素）
 	
 	// ==================== 下料算法参数（单位：mm）====================

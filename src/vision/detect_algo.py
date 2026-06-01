@@ -146,7 +146,7 @@ class DetectAlgoService:
         cv2.imwrite(f"{path}/depth_{timestamp}.png", depth_arr)
         return f"{path}/rgb_{timestamp}.jpg"
 
-    def execute_detection(self, ptype: int, detect: int=0):
+    def execute_detection(self, ptype: int, detect: int=0, save_img: bool=True):
         """
         对外公开的同步业务接口
         :param ptype, 1-普通, 2-上料, 3-下料, 4-铝屑
@@ -289,7 +289,8 @@ class DetectAlgoService:
                     result_img = self.detector.draw_result_with_rotated_box(depth_color, result)
                     # cv2.imshow("result-line", result_img)
 
-                    if self.save_jpg:
+                    # if self.save_jpg:
+                    if save_img:
                         cv2.imwrite(f"{path}/detect_result_horizontal_line_{timestamp}.jpg", result_img)
 
                     cv2.waitKey(0)
@@ -467,6 +468,7 @@ def main():
         response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_aluminum)
         logger.info(f"response : {response}")
         print(response)
 

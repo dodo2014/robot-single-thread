@@ -199,14 +199,14 @@ class OrbbecCameraDevice:
             # 检查是否有设备
             device_list = self.ctx.query_devices()
             if device_list.get_count() == 0:
-                self.is_connected = False
+                # self.is_connected = False
                 self.disconnect()
                 return False, "No device connected"
 
-            # if not self.is_stream_configured:
-            #     logger.info("Device detected, configuring streams...")
-            #     if not self._setup_streams():
-            #         return False, "Failed to configure streams"
+            # 如果之前是处于已连接但卡死的状态，必须先执行一次硬清理
+            # 不要尝试直接去 stop 一个旧的 pipeline，直接走毁灭流程重建最安全
+            if not self.is_connected and self.pipeline is not None:
+                self.disconnect()
 
             # 如果还没有 Pipeline 或 Config，进行硬件资源初始化
             if self.pipeline is None:
@@ -216,12 +216,12 @@ class OrbbecCameraDevice:
                     return False, msg
 
             # 注意：如果 pipeline 已经开启，先停止
-            try:
-                self.pipeline.stop()
-            except:
-                pass
+            # try:
+            #     self.pipeline.stop()
+            # except:
+            #     pass
 
-            # # 启动 Pipeline
+            # 启动 Pipeline
             # self.pipeline.start(self.config)
             # 3. 启动流
             try:
@@ -236,30 +236,56 @@ class OrbbecCameraDevice:
             except OBError as e:
                 # 如果启动失败（例如被占用），清理资源以便下次重试
                 self.disconnect()
-                return False, str(e)
+                return False, f"Start OBError: {e}"
 
-        # except OBError as e:
-        #     # 如果启动失败（比如USB带宽不足，或者配置失效），重置标志位
-        #     self.is_stream_configured = False
-        #     logger.error(f"SDK OBError Error during connect: {e}")
-        #     return False, str(e)
         except Exception as e:
             # self.is_stream_configured = False
             self.disconnect()
             logger.error(f"SDK Error during connect: {e}")
             return False, str(e)
 
-    def disconnect(self):
-        """关闭设备"""
+    def _clean_resources(self):
+        """【绝对隔离的错误吞噬区】安全的资源释放"""
         self.is_connected = False
-        if self.pipeline:
+
+        if self.pipeline is not None:
             try:
+                # 尝试优雅停止。
+                # 如果此时 USB 已断开，这里必然抛出 bad magic 或超时的 OBError
                 self.pipeline.stop()
-            except OBError:
-                pass
-            self.pipeline = None
+            except OBError as e:
+                logger.warning(f"底层相机停止异常 (OBError已吞噬): {e}")
+            except Exception as e:
+                logger.warning(f"底层相机停止异常 (Exception已吞噬): {e}")
+            finally:
+                # 【终极保命符】
+                # 无论 stop() 成功与否，强制销毁 Python 侧的 pipeline 引用。
+                # 这样会触发底层的 C++ 析构函数，强行释放卡死的句柄。
+                self.pipeline = None
+
+        # 强制销毁其他相关配置对象
         self.config = None
         self.align_filter = None
+
+    def disconnect(self):
+        """主动断开设备"""
+        try:
+            self._clean_resources()
+        except Exception as e:
+            # 万一 C++ 析构时发生了严重错误导致抛出异常，在这里被最后一道防线拦住
+            logger.error(f"Disconnect 发生严重崩溃并被成功拦截: {e}\n{traceback.format_exc()}")
+
+    # def disconnect(self):
+    #     """关闭设备"""
+    #     self.is_connected = False
+    #     if self.pipeline:
+    #         try:
+    #             self.pipeline.stop()
+    #         except OBError:
+    #             pass
+    #         self.pipeline = None
+    #     self.config = None
+    #     self.align_filter = None
 
     def get_frames(self, timeout_ms=5000):
         """
@@ -312,8 +338,12 @@ class OrbbecCameraDevice:
 
         except OBError as e:
             logger.error(f"Wait for frames error: {e} \n {traceback.format_exc()}")
+            # 【核心修改】: 一旦底层超时或报错，立刻触发隔离区切断状态
+            self.disconnect()
         except Exception as e:
             logger.error(f"Unexpected error getting frames: {e}\n {traceback.format_exc()}")
+            # 【核心修改】
+            self.disconnect()
 
         return False, None, None
 

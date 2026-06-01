@@ -113,7 +113,7 @@ def compute_gripper_target(
         # target_abs_angle = current_abs_angle_deg + rc
         target_abs_angle = current_abs_angle_deg - rc  + angle_offset #
 
-        print(f"target abs_angle: {target_abs_angle}")
+        logger.info(f"current abs_angle: {current_abs_angle_deg}, rc: {rc}, target abs_angle: {target_abs_angle}")
 
         # rc = rc + cam_rotation
         # phase_diff = cam_rotation - gripper_install_angle

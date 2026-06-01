@@ -65,7 +65,7 @@ class RGBDDetector:
         self.product_width = 120
         self.interval_height = 20
         self.product_start_height = 340
-        # self.tray_start_height = 1000
+        # self.unload_tray_depth = 1000
         self.product_count_per_layer = 8
 
         # ===================== 
@@ -2668,7 +2668,7 @@ class RGBDDetector:
             roi_x_start, roi_y_start,
             min_width=self.end_min_length,
             max_width=self.end_max_length,
-            min_height=20,                      # 最小高度3像素
+            min_height=50,                      # 最小高度3像素
             max_height=500                     # 最大高度500像素
         )
         
@@ -2980,9 +2980,10 @@ class RGBDDetector:
         target_position = 0
         
         # 1. 预处理深度图
-        depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
-        depth_filtered = cv2.GaussianBlur(depth_filtered, (3,3), self.gaussian_sigma)
-        
+        depth_filtered = depth_img
+        # depth_filtered = cv2.medianBlur(depth_img, self.median_blur_kernel)
+        # depth_filtered = cv2.GaussianBlur(depth_filtered, (3,3), self.gaussian_sigma)
+
         h, w = depth_filtered.shape
         roi_x_start = max(self.unload_roi_x, 0)
         roi_x_end = min(self.unload_roi_x + self.unload_roi_w, w)
@@ -3006,7 +3007,8 @@ class RGBDDetector:
         
         # 计算各层理论深度：第0层最浅（最上层），第N层最深（最下层）
         top_layer_depth_mm = tray_depth_mm - (layer_count - 1) * layer_thickness_mm
-        
+        min_depth_mm = top_layer_depth_mm - 10
+        max_depth_mm = self.unload_tray_depth + 10
         print(f"下料参数: 总层数={layer_count}, 层厚={layer_thickness_mm}mm")
         print(f"托盘深度={tray_depth_mm}mm, 最上层深度={top_layer_depth_mm}mm")
         print(f"每层产品数量={item_count}, 沿Y方向排列")
@@ -3034,11 +3036,12 @@ class RGBDDetector:
                 item_y_mm = start_y_mm + pos_idx * (item_height_mm + item_interval_mm)
                 
                 # 计算产品四个角点的像素坐标
+                margin_y_mm = 2
                 corners_world = [
-                    (start_x_mm, item_y_mm, layer_z_mm),
-                    (start_x_mm + item_width_mm, item_y_mm, layer_z_mm),
-                    (start_x_mm + item_width_mm, item_y_mm + item_height_mm, layer_z_mm),
-                    (start_x_mm, item_y_mm + item_height_mm, layer_z_mm)
+                    (start_x_mm, item_y_mm + margin_y_mm, layer_z_mm),
+                    (start_x_mm + item_width_mm, item_y_mm + margin_y_mm, layer_z_mm),
+                    (start_x_mm + item_width_mm, item_y_mm + item_height_mm - margin_y_mm, layer_z_mm),
+                    (start_x_mm, item_y_mm + item_height_mm - margin_y_mm, layer_z_mm)
                 ]
                 corners_pixel = [world_to_pixel(x, y, z) for x, y, z in corners_world]
                 
@@ -3062,7 +3065,8 @@ class RGBDDetector:
                     # 从裁剪后的 ROI 深度图中提取该区域的深度值
                     region_depth = depth_roi[roi_top:roi_bottom, roi_left:roi_right]
                     valid_mask = (region_depth != self.depth_invalid) & \
-                                (region_depth <= self.unload_tray_depth)
+                                (region_depth >= min_depth_mm) & \
+                                (region_depth <= max_depth_mm)
                     valid_depths = region_depth[valid_mask]
                     
                     if len(valid_depths) > 0:
@@ -3117,8 +3121,35 @@ class RGBDDetector:
         
         if not empty_positions:
             print("未找到空位，下料区域已满")
+            target_layer = 10001 # 约定值
             return exists_flag, coords, target_layer, target_position
-        
+               
+        # 检查是否全空且无托盘
+        if len(empty_positions) == len(all_positions):
+            # 全空：进一步判断托盘是否存在
+            valid_mask = (depth_roi != self.depth_invalid) & (depth_roi <= self.unload_tray_depth + 100)  # 放宽一点上限
+            valid_depths = depth_roi[valid_mask]
+            if len(valid_depths) == 0:
+                print("警告：ROI 区域内无有效深度点，可能没有托盘")
+                exists_flag = DetectStatus.NOTHING
+                target_layer = layer_count
+                target_position = 0
+                return exists_flag, coords, target_layer, target_position
+            
+            # 取最深的前10%深度点的平均值
+            sorted_depths = np.sort(valid_depths)
+            top10_count = max(1, int(len(sorted_depths) * 0.05))
+            deepest_mean = np.median(sorted_depths[-top10_count:])
+            print(f"ROI 最深10%深度平均值: {deepest_mean:.1f}mm")
+            
+            # 如果最深点平均值比设定托盘深度小太多（例如小30mm），认为托盘缺失
+            if deepest_mean < self.unload_tray_depth - 30:   # 阈值可根据实际调整
+                print(f"警告：最深深度 {deepest_mean:.1f}mm 远小于托盘深度 {self.unload_tray_depth}mm，可能没有托盘")
+                exists_flag = DetectStatus.NOTHING
+                target_layer = 10000 # layer_count # 约定值
+                target_position = 0
+                return exists_flag, coords, target_layer, target_position
+                    
         exists_flag = DetectStatus.EXIST
 
         unload_sort_rule = getattr(self, 'unload_sort_rule', self.unload_sort_rule)
@@ -3437,6 +3468,8 @@ class RGBDDetector:
         roi_info = {
             PType.MATERIAL_CHECK: ("Material ROI", (self.material_roi_x, self.material_roi_y), 
                                 (self.material_roi_x+self.material_roi_w, self.material_roi_y+self.material_roi_h), (0,255,0)),
+            PType.FEED_END_CHECK: ("End ROI", (self.end_roi_x, self.end_roi_y), 
+                            (self.end_roi_x+self.end_roi_w, self.end_roi_y+self.end_roi_h), (255,0,0)),
             PType.FEED_CHECK: ("Feed ROI", (self.feed_roi_x, self.feed_roi_y), 
                             (self.feed_roi_x+self.feed_roi_w, self.feed_roi_y+self.feed_roi_h), (255,0,0)),
             PType.UNLOAD_CHECK: ("Unload ROI", (self.unload_roi_x, self.unload_roi_y), 
