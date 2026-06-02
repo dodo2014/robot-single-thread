@@ -330,37 +330,31 @@ class OrbbecCameraDevice:
                 if not frames:
                     return False, None, None
 
+                # 软对齐可能会因为光线突变偶发失败
+                # if self.align_filter:
+                #     try:
+                #         aligned_frames = self.align_filter.process(frames)
+                #         if aligned_frames:
+                #             frames = aligned_frames.as_frame_set()
+                #         else:
+                #             # 【修正】如果对齐失败，记录警告，但不要断开，直接视为这一次取帧失效
+                #             logger.warning("Align filter failed to process frames, skipping this frame.")
+                #             return False, None, None
+                #     except OBError as e:
+                #         logger.warning(f"Align filter OBError: {e}")
+                #         return False, None, None
+
                 # 对齐处理
                 if self.align_filter:
-                    try:
-                        aligned_frames = self.align_filter.process(frames)
-                        if aligned_frames is None:
-                            return False, None, None
-
+                    aligned_frames = self.align_filter.process(frames)
+                    if aligned_frames:
                         frames = aligned_frames.as_frame_set()
-                    except OBError as e:
-                        logger.error(f"Alignment failed: {e}")
-                        return False, None, None
 
                 # 提取彩色和深度帧
                 color_frame = frames.get_color_frame()
                 depth_frame = frames.get_depth_frame()
 
                 if color_frame is not None and depth_frame is not None:
-                    # # 安全地验证帧数据
-                    # try:
-                    #     # 尝试获取数据以确保帧是有效的
-                    #     color_data = color_frame.get_data()
-                    #     depth_data = depth_frame.get_data()
-                    #
-                    #     if color_data is not None and depth_data is not None:
-                    #         return True, color_frame, depth_frame
-                    #     else:
-                    #         logger.warning("Frame data is None")
-                    #         return False, None, None
-                    # except Exception as e:
-                    #     logger.error(f"Error validating frame data: {e}")
-                    #     return False, None, None
                     # 立即转换为 Python 安全的 Numpy 内存
                     color_img = self._convert_color_frame(color_frame)
                     depth_img = self._convert_depth_frame(depth_frame)
@@ -394,7 +388,10 @@ class OrbbecCameraDevice:
             for _ in range(num_frames):
                 try:
                     # 设定极短的超时时间，把积压在内存里的图迅速抽走抛弃
-                    frames = self.pipeline.wait_for_frames(100)
+                    # 在 10fps 下，100ms 的超时极大概率会什么都抽不到！ 必须放宽到 200ms 左右。
+                    # FPS=10 时，每帧需要 100ms 物理生成时间。
+                    # 超时必须大于 100ms，这里设为 200ms 最安全！
+                    frames = self.pipeline.wait_for_frames(200)
                     if frames:
                         # 显式释放内存
                         color = frames.get_color_frame()

@@ -69,23 +69,21 @@ class DetectAlgoService:
         """抽取出预热逻辑：持续获取有效帧，直到帧数达标，模拟官方示例的 while True + continue 语义"""
         logger.info("Warming up camera...")
         warmed = 0
-        target = 20
+        target = 5  # 预热自动曝光, 10fps下建议target = 5，原先的20耗时太长
         max_attempts = 100
         attempt = 0
         while warmed < target and attempt < max_attempts:
             try:
-                success, color_frame, depth_frame = self.device.get_frames(timeout_ms=500)
+                success, color_img, depth_img = self.device.get_frames(timeout_ms=500)
                 if success:
                     warmed += 1
-                    # 【核心】：显式释放底层 C++ 帧缓冲！！
-                    # 强迫 pyorbbecsdk 立即将 Buffer 归还给 SDK，防止缓存池枯竭
-                    del color_frame
-                    del depth_frame
+                    del color_img
+                    del depth_img
                 else:
-                    time.sleep(0.033)
+                    time.sleep(0.1) # 休眠时间和帧率有关系，计算方法：1/帧率，表示一帧需要的时间
             except Exception as e:
                 logger.warning(f"Camera warm-up frame error: {e}")
-                time.sleep(0.033)
+                time.sleep(0.1)
             attempt += 1
         logger.info(f"Camera warm-up complete (got {warmed} valid frames in {attempt} attempts).")
 
@@ -121,13 +119,19 @@ class DetectAlgoService:
             logger.info(f"Camera keep alive worker...")
             try:
                 # 拔掉瞬间直接去取图会导致底层的 wait_for_frames 直接崩溃
-                if self.device.is_alive():
-                    ret, color_img, depth_img = self.device.get_frames(timeout_ms=500)
-                    if ret:
-                        logger.info(f"Camera keep alive worker, get img success")
+                # if self.device.is_alive():
+                #     ret, color_img, depth_img = self.device.get_frames(timeout_ms=500)
+                #     if ret:
+                #         logger.info(f"Camera keep alive worker, get img success")
+
+                if self.device.ctx:
+                    count = self.device.ctx.query_devices().get_count()
+                    logger.info(f"Camera keep alive worker count: {count}")
+                    if count == 0:
+                        logger.warning("camera removed")
 
             except Exception as e:
-                logger.info(f"keep_alive_worker error: {e} \n {traceback.format_exc()}")
+                logger.info(f"camera keep alive worker error: {e} \n {traceback.format_exc()}")
                 pass
 
             time.sleep(15)
@@ -200,6 +204,8 @@ class DetectAlgoService:
             }
         """
         last_err = ""
+        consecutive_failures = 0
+
         for attempt in range(self.max_retries):
             # 1. 检查并尝试重连
             if not self.device.is_alive():
@@ -209,36 +215,48 @@ class DetectAlgoService:
                 self.device.disconnect()
                 time.sleep(0.5)
 
-                success, msg = self.device.connect()
-                if not success:
+                con_res, msg = self.device.connect()
+                if not con_res:
                     last_err = msg
                     time.sleep(1.0)
                     continue
                 else:
-                    # 【核心修复 2】：连接成功后，绝对不能立刻取图！
-                    # 必须给底层光学传感器 1.5 秒的预热时间，否则立刻取图会触发假掉帧
+                    # 连接成功后，绝对不能立刻取图！必须给底层光学传感器 1.5 秒的预热时间，否则立刻取图会触发假掉帧
                     logger.info("Camera connected, warming up optical sensor...")
                     time.sleep(1.5)
 
                     # 预热后，把这 1.5 秒内积攒的废图抽掉，保证曝光正常
-                    if hasattr(self.device, 'flush_frames'):
-                        self.device.flush_frames(num_frames=3)
+                    # if hasattr(self.device, 'flush_frames'):
+                    self.device.flush_frames(num_frames=2)
 
             # 2. 采集图像
             success, color_img, depth_img = self.device.get_frames(timeout_ms=2000)
+
             if not success:
+                consecutive_failures += 1
                 last_err = "Failed to capture frames"
                 # time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
                 time.sleep(0.1)  # 等待约一帧的时间 (10fps的周期)
-                # 只有当连续多次（例如超过3次）都拿不到图时，才真正去重启相机
-                if attempt >= 2:
+
+                # get_frames失败，原因很多，SDK没在超时时间内拿到新帧/Align失败/MJPG解码失败/Depth Frame为空，都当作失败返回的
+                # 只有当连续多次（例如超过20次）都拿不到图时，才真正去重启相机
+
+                if consecutive_failures >= 20:
                     logger.warning("Multiple consecutive frame drops, forcing disconnect...")
                     self.device.disconnect()
+                    consecutive_failures = 0 # 重置计数，等待下一轮重连
                     time.sleep(1.0) # 给 USB 驱动释放句柄的时间
-                    # self.device.connect()
-                # # 采集失败通常意味着链路抖动，尝试重新初始化 pipeline
-                # self.device.connect()
+
+                # 判断设备是否掉线，真掉线，和 前面的 if consecutive_failures >= 20 类似
+                # if not self.device.is_alive():
+                #     logger.warning("Camera really lost")
+                #     self.device.disconnect()
+                #     time.sleep(1.0)  # 给 USB 驱动释放句柄的时间
+
                 continue
+
+            # 成功拿到图，清零失败计数器
+            consecutive_failures = 0
 
             if not detect:
                 logger.info(f"Detect denied ...")
@@ -290,33 +308,55 @@ class DetectAlgoService:
     def execute_detection_midian_depth(self, ptype:int, number:int=21, check_estop_func=None):
         """获取深度值的中位数返回值"""
 
-        # 在正式获取图像前，排空旧图
-        self.device.flush_frames(num_frames=5)
+        # 1. 执行一次带有重连保护的空调用，确保链路是通的，并顺便预热
+        # 这一步保证了如果相机掉线，会在这里花 3 秒连上
+        init_check = self.execute_detection(ptype, detect=0, save_img=False)
+        if init_check.get("code") != 0:
+            return {"code": -99, "err_msg": "Camera link broken before sequence"}
 
+        # 在正式获取图像前，排空旧图
+        # self.device.flush_frames(num_frames=5)
+
+        # for idx in range(number):
+        #     if idx < filter_number:  # 运动到点位之后立即拍照，图像深度不稳定，前7次只触发拍照，不处理
+        #         self.execute_detection(ptype, detect=0)
+        #         time.sleep(0.01)
+
+        # 2. 预热排空 (非常重要，代替你之前的 if idx < 7: detect=0)
+        # 直接让底层快速抽掉 7 帧，不经过任何上层封装，耗时仅需 0.2 秒！
         filter_number = 7
+        self.device.flush_frames(num_frames=filter_number)
+
         required_count = number - filter_number
+        consecutive_failures = 0
 
         results = []
-        for idx in range(number):
-            if idx < filter_number:  # 运动到点位之后立即拍照，图像深度不稳定，前7次只触发拍照，不处理
-                self.execute_detection(ptype, detect=0)
-                time.sleep(0.01)
 
         while len(results) < required_count:
             if check_estop_func and check_estop_func():
                 return {"code":-99, "err_msg":f"检测异常: 系统急停"}
-            result = self.execute_detection(ptype, detect=1)
+
+            result = self.execute_detection(ptype, detect=1)  # 可以加上save_img=False节省时间
             print(f"result is : {result}")
 
-            # 过滤有效深度的值
-            if ptype in (const.photo_type_loading, const.photo_type_find_head):
-                if result["code"] == 0 and result["result"]["coords"][2] <= const.depth_valid_filter:
+            if result["code"] == 0:
+                consecutive_failures = 0  # 成功则重置失败计数
+
+                # 过滤有效深度的值
+                if ptype in (const.photo_type_loading, const.photo_type_find_head):
+                    if result["result"]["coords"][2] <= const.depth_valid_filter:
+                        results.append(result)
+                else:
                     results.append(result)
             else:
-                results.append(result)
+                # 失败了，可能是偶发丢帧
+                consecutive_failures += 1
+                if consecutive_failures > 3:
+                    logger.error("连拍过程中相机彻底掉线，提前终止中位数采集")
+                    break
 
             # 给底层 USB 留出喘息时间，避免阻塞 (30fps = 33ms 一张)
-            time.sleep(0.01)
+            # time.sleep(0.01)
 
         print("#########################################")
 
@@ -433,8 +473,8 @@ def main():
         start_time = round(time.time() * 1000)
         logger.info(f"Start Time: {start_time}")
         # response = service.execute_detection(ptype=const.photo_type_loading, detect=1)
-        # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_aluminum)
