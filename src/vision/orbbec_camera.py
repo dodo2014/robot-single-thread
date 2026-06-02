@@ -1,35 +1,34 @@
 import sys
 import traceback
+import time
+import threading
+import cv2
+import numpy as np
 from pyorbbecsdk import (AlignFilter, Pipeline, Config, Context, OBError,
                          OBFormat, OBStreamType, OBAlignMode, OBSensorType)
 from src.utils import logger
 
 class OrbbecCameraDevice:
     def __init__(self, width=1280, height=800, fps=10):
+        # 不再使用 set_device_changed_callback，坚决不用底层 C++ 回调，极易引发崩溃
+        
         self.ctx = Context()
-        # 设置设备插拔回调 (可选，但这里我们主要用轮询方式实现)
-        # self.ctx.set_device_changed_callback(self._on_device_changed)
-
         self.width = width
         self.height = height
         self.fps = fps
 
-        # self.pipeline = Pipeline()  # 提前初始化 pipeline 以便获取 profile
-        # self.config = Config()
-
         self.pipeline = None
         self.config = None
-
         self.align_filter = None
-
-        # 流配置 标志位
-        # self.is_stream_configured = False
-
         # 状态标志
         self.is_connected = False
 
-        # 获取设备并配置流
-        # self._setup_streams()
+        # 增加递归锁，防止 keep_alive 线程和业务线程冲突
+        self._lock = threading.RLock()
+
+        # 重连冷却时间控制
+        self._last_reconnect_time = 0
+        self._reconnect_cooldown = 3.0  # 3秒内禁止重复发起连接
 
     # def _on_device_changed(self, removed_list, added_list):
     #     """设备插拔回调（底层SDK通知）"""
@@ -40,7 +39,7 @@ class OrbbecCameraDevice:
     #         self.is_connected = False  # 设备拔出，标记配置失效
 
     def _init_hardware_resources(self):
-        """内部函数：创建Pipeline和Config对象，并配置流"""
+        """内部函数：创建Pipeline和Config对象，并配置流 (调用前必须加锁)"""
         try:
             # 再次检查设备数量
             if self.ctx.query_devices().get_count() == 0:
@@ -64,13 +63,11 @@ class OrbbecCameraDevice:
             color_profile = None
 
             # formats_to_try = [OBFormat.MJPG, OBFormat.RGB]
-            formats_to_try = [OBFormat.RGB, OBFormat.YUYV]
+            formats_to_try = [OBFormat.RGB, OBFormat.YUYV, OBFormat.MJPG]
             # 尝试队列：MJPG -> RGB -> 默认, 1280*720不支持RGB, 优先使用MJPG
             for fmt in formats_to_try:
                 try:
-                    color_profile = color_profiles.get_video_stream_profile(
-                        self.width, self.height, fmt, self.fps
-                    )
+                    color_profile = color_profiles.get_video_stream_profile(self.width, self.height, fmt, self.fps)
                     # color_profile = color_profiles.get_video_stream_profile(
                     #     640, 480, fmt, self.fps
                     # )
@@ -90,9 +87,7 @@ class OrbbecCameraDevice:
             try:
                 depth_profiles = self.pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
                 # 深度图通常使用 Y16 格式
-                depth_profile = depth_profiles.get_video_stream_profile(
-                    self.width, self.height, OBFormat.Y16, self.fps
-                )
+                depth_profile = depth_profiles.get_video_stream_profile(self.width, self.height, OBFormat.Y16, self.fps)
                 # depth_profile = depth_profiles.get_video_stream_profile(
                 #     848, 480, OBFormat.Y16, self.fps
                 # )
@@ -102,29 +97,8 @@ class OrbbecCameraDevice:
                 logger.warning(f"Warning: Specific Depth profile not supported ({e}), using default.")
                 self.config.enable_stream(OBStreamType.DEPTH_STREAM)
 
-            # 3. 设置软件对齐
-            # gemini 336l 不支持720p下的硬件对齐(OBAlignMode.HW_MODE), 如果运行报错，可以注释掉软件对齐
-            # logger.info("Setting alignment mode to SW_MODE...")
-            # self.config.set_align_mode(OBAlignMode.SW_MODE)
-
-            # 在设置深度流之后，添加验证
-            logger.info("=== Stream Configuration Summary ===")
-            # logger.info(f"Color settings: {self.color_width}x{self.color_height} @{self.fps}fps")
-            # logger.info(f"Depth settings: {self.depth_width}x{self.depth_height} @{self.fps}fps")
-
-            # 尝试获取实际生效的配置
-            try:
-                # 检查config对象中实际配置的流
-                logger.info(
-                    f"Config align mode: {self.config.get_align_mode() if hasattr(self.config, 'get_align_mode') else 'unknown'}")
-            except:
-                logger.warning("Could not verify align mode")
-
             logger.info("=== Configuration Complete ===")
 
-
-            # 标记配置成功
-            # self.is_stream_configured = True
             return True, "Ready"
         except OBError as e:
             return False, f"SDK Error: {e}"
@@ -194,99 +168,105 @@ class OrbbecCameraDevice:
     #         return False
 
     def connect(self):
-        """启动流水线, 支持热插拔"""
-        try:
-            # 如果 Context 丢了，重新创建
-            if getattr(self, 'ctx', None) is None:
-                self.ctx = Context()
+        """启动流水线, 支持热插拔(加锁保护)"""
+        with self._lock:
 
-            # 检查是否有设备
-            device_list = self.ctx.query_devices()
-            if device_list.get_count() == 0:
-                # self.is_connected = False
-                self.disconnect()
+            # 【防重连风暴】：判断是否在冷却时间内
+            now = time.time()
+            if now - self._last_reconnect_time < self._reconnect_cooldown:
+                return False, "In reconnect cooldown"
+            self._last_reconnect_time = now
 
-                # 彻底销毁 Context！如果没插相机，强行销毁上下文。
-                # 这样下次循环再调用 connect 时，SDK 会被逼着从零重新扫描 Windows 的 USB 端口，
-                # 绝对不会受旧缓存的干扰，完美解决“插上了但软件认不出”的灵异问题。
-                self.ctx = None
-
-                return False, "No device connected"
-
-            # 如果之前是处于已连接但卡死的状态，必须先执行一次硬清理
-            # 不要尝试直接去 stop 一个旧的 pipeline，直接走毁灭流程重建最安全
-            if not self.is_connected and self.pipeline is not None:
-                self.disconnect()
-
-            # 如果还没有 Pipeline 或 Config，进行硬件资源初始化
-            if self.pipeline is None:
-                success, msg = self._init_hardware_resources()
-                if not success:
-                    self.is_connected = False
-                    return False, msg
-
-            # 注意：如果 pipeline 已经开启，先停止
-            # try:
-            #     self.pipeline.stop()
-            # except:
-            #     pass
-
-            # 启动 Pipeline
-            # self.pipeline.start(self.config)
-            # 3. 启动流
             try:
-                self.pipeline.enable_frame_sync()
-                self.pipeline.start(self.config)
-                self.is_connected = True
+                # 如果 Context 丢了，重新创建
+                if not hasattr(self, "ctx") or self.ctx is None:
+                    self.ctx = Context()
 
-                if hasattr(self.config, 'get_align_mode'):
-                    logger.info(f">>> Current align mode: {self.config.get_align_mode()}")
+                # 检查是否有设备
+                device_list = self.ctx.query_devices()
+                if device_list.get_count() == 0:
+                    # self.is_connected = False
+                    self.disconnect()
 
-                return True, "Success"
-            except OBError as e:
-                # 如果启动失败（例如被占用），清理资源以便下次重试
+                    # 彻底销毁 Context！如果没插相机，强行销毁上下文。
+                    # 这样下次循环再调用 connect 时，SDK 会被逼着从零重新扫描 Windows 的 USB 端口枚举，
+                    # 绝对不会受旧缓存的干扰，完美解决“插上了但软件认不出”的灵异问题。
+                    self.ctx = None
+
+                    return False, "No device connected"
+
+                # 如果之前是处于已连接但卡死的状态，必须先执行一次硬清理
+                # 不要尝试直接去 stop 一个旧的 pipeline，直接走毁灭流程重建最安全
+                if not self.is_connected and self.pipeline is not None:
+                    self.disconnect()
+
+                # 如果还没有 Pipeline 或 Config，进行硬件资源初始化
+                if self.pipeline is None:
+                    success, msg = self._init_hardware_resources()
+                    if not success:
+                        self.disconnect()
+                        return False, msg
+
+                # 启动流
+                try:
+                    self.pipeline.enable_frame_sync()
+                    self.pipeline.start(self.config)
+                    self.is_connected = True
+
+                    return True, "Success"
+                except OBError as e:
+                    # 如果启动失败（例如被占用），清理资源以便下次重试
+                    self.disconnect()
+                    return False, f"Start OBError: {e}"
+
+            except Exception as e:
                 self.disconnect()
-                return False, f"Start OBError: {e}"
-
-        except Exception as e:
-            # self.is_stream_configured = False
-            self.disconnect()
-            logger.error(f"SDK Error during connect: {e}")
-            return False, str(e)
+                logger.error(f"SDK Error during connect: {e}")
+                return False, str(e)
 
     def _clean_resources(self):
-        """【绝对隔离的错误吞噬区】安全的资源释放"""
+        """ 绝对隔离的资源释放，确保 Python 侧废弃所有引用"""
         self.is_connected = False
 
         # 物理防崩溃检查
         # 如果物理设备已经拔出，C++ 底层的 USB 句柄已经失效。
         # 此时调用 stop() 会导致 SDK 内部抛出 Bad Magic 甚至直接段错误闪退。
-        device_physically_exists = False
-        try:
-            if self.ctx.query_devices().get_count() > 0:
-                device_physically_exists = True
-        except:
-            pass
+        # device_physically_exists = False
+        # try:
+        #     if self.ctx.query_devices().get_count() > 0:
+        #         device_physically_exists = True
+        # except:
+        #     pass
+
+        # if self.pipeline is not None:
+        #     if device_physically_exists:
+        #         try:
+        #             # 尝试优雅停止。
+        #             # 如果此时 USB 已断开，这里必然抛出 bad magic 或超时的 OBError
+        #             self.pipeline.stop()
+        #         except OBError as e:
+        #             logger.warning(f"底层相机停止异常 (OBError已吞噬): {e}")
+        #         except Exception as e:
+        #             logger.warning(f"底层相机停止异常 (Exception已吞噬): {e}")
+        #         # finally:
+        #         #     # 【终极保命符】
+        #         #     # 无论 stop() 成功与否，强制销毁 Python 侧的 pipeline 引用。
+        #         #     # 这样会触发底层的 C++ 析构函数，强行释放卡死的句柄。
+        #         #     self.pipeline = None
+        #
+        #     # 【终极保命符】
+        #     # 无论如何，强制销毁 Python 侧的 pipeline 引用，这会触发底层安全的析构回收，而不是主动发 stop 指令
+        #     self.pipeline = None
 
         if self.pipeline is not None:
-            if device_physically_exists:
-                try:
-                    # 尝试优雅停止。
-                    # 如果此时 USB 已断开，这里必然抛出 bad magic 或超时的 OBError
-                    self.pipeline.stop()
-                except OBError as e:
-                    logger.warning(f"底层相机停止异常 (OBError已吞噬): {e}")
-                except Exception as e:
-                    logger.warning(f"底层相机停止异常 (Exception已吞噬): {e}")
-                # finally:
-                #     # 【终极保命符】
-                #     # 无论 stop() 成功与否，强制销毁 Python 侧的 pipeline 引用。
-                #     # 这样会触发底层的 C++ 析构函数，强行释放卡死的句柄。
-                #     self.pipeline = None
-
-            # 【终极保命符】
-            # 无论如何，强制销毁 Python 侧的 pipeline 引用，这会触发底层安全的析构回收，而不是主动发 stop 指令
-            self.pipeline = None
+            try:
+                self.pipeline.stop()
+            except Exception as e:
+                logger.error(f"底层相机停止异常 (Exception已吞噬): {e}")
+                pass  # 忽略一切停止异常 (Device response with bad magic 等)
+            finally:
+                # 无论 stop 成功与否，必须执行：
+                self.pipeline = None
 
         # 强制销毁其他相关配置对象
         self.config = None
@@ -294,11 +274,12 @@ class OrbbecCameraDevice:
 
     def disconnect(self):
         """主动断开设备"""
-        try:
-            self._clean_resources()
-        except Exception as e:
-            # 万一 C++ 析构时发生了严重错误导致抛出异常，在这里被最后一道防线拦住
-            logger.error(f"Disconnect 发生严重崩溃并被成功拦截: {e}\n{traceback.format_exc()}")
+        with self._lock:
+            try:
+                self._clean_resources()
+            except Exception as e:
+                # 万一 C++ 析构时发生了严重错误导致抛出异常，在这里被最后一道防线拦住
+                logger.error(f"Disconnect 发生严重崩溃并被成功拦截: {e}\n{traceback.format_exc()}")
 
     # def disconnect(self):
     #     """关闭设备"""
@@ -312,100 +293,130 @@ class OrbbecCameraDevice:
     #     self.config = None
     #     self.align_filter = None
 
-    def get_frames(self, timeout_ms=5000):
+    # 底层直接转化为 Numpy 并销毁 C++ 对象
+    def _convert_color_frame(self, color_frame):
+        f_width = color_frame.get_width()
+        f_height = color_frame.get_height()
+        color_format = color_frame.get_format()
+        raw_data = np.frombuffer(color_frame.get_data(), dtype=np.uint8)
+
+        if color_format == OBFormat.MJPG:
+            # 如果是 MJPG，使用 OpenCV 解码成 BGR
+            bgr_img = cv2.imdecode(raw_data, cv2.IMREAD_COLOR)
+            if bgr_img is None: return None
+            # 转换为 RGB (因为之前的逻辑是存图前转 BGR，或者算法需要 RGB)
+            return cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
+        elif color_format == OBFormat.RGB:
+            # 只有格式确实是 RGB 时才能直接 reshape
+            return raw_data.reshape((f_height, f_width, 3)).copy()
+        return None
+
+    def _convert_depth_frame(self, depth_frame):
+        d_width = depth_frame.get_width()
+        d_height = depth_frame.get_height()
+        return np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((d_height, d_width)).copy()
+
+    def get_frames(self, timeout_ms=2000):
         """
-        获取一帧同步数据
-        返回: (status, color_frame, depth_frame)
+        获取同步帧数据并【立即转为 Python 格式】
+        返回: (status, color_numpy_array, depth_numpy_array)
         """
-        try:
+        with self._lock:
             if not self.pipeline or not self.is_connected:
                 return False, None, None
 
-            frames = self.pipeline.wait_for_frames(timeout_ms)
-            if not frames:
+            try:
+                frames = self.pipeline.wait_for_frames(timeout_ms)
+                if not frames:
+                    return False, None, None
+
+                # 对齐处理
+                if self.align_filter:
+                    try:
+                        aligned_frames = self.align_filter.process(frames)
+                        if aligned_frames is None:
+                            return False, None, None
+
+                        frames = aligned_frames.as_frame_set()
+                    except OBError as e:
+                        logger.error(f"Alignment failed: {e}")
+                        return False, None, None
+
+                # 提取彩色和深度帧
+                color_frame = frames.get_color_frame()
+                depth_frame = frames.get_depth_frame()
+
+                if color_frame is not None and depth_frame is not None:
+                    # # 安全地验证帧数据
+                    # try:
+                    #     # 尝试获取数据以确保帧是有效的
+                    #     color_data = color_frame.get_data()
+                    #     depth_data = depth_frame.get_data()
+                    #
+                    #     if color_data is not None and depth_data is not None:
+                    #         return True, color_frame, depth_frame
+                    #     else:
+                    #         logger.warning("Frame data is None")
+                    #         return False, None, None
+                    # except Exception as e:
+                    #     logger.error(f"Error validating frame data: {e}")
+                    #     return False, None, None
+                    # 立即转换为 Python 安全的 Numpy 内存
+                    color_img = self._convert_color_frame(color_frame)
+                    depth_img = self._convert_depth_frame(depth_frame)
+
+                    # 立即、显式释放 C++ 底层引用！绝不让它活着离开这个函数
+                    del color_frame
+                    del depth_frame
+                    del frames
+
+                    if color_img is not None and depth_img is not None:
+                        return True, color_img, depth_img
+
                 return False, None, None
 
-            if self.align_filter:
-                try:
-                    aligned_frames = self.align_filter.process(frames)
-                    if aligned_frames is None:
-                        return False, None, None
+            except Exception as e:
+                logger.error(f"Wait for frames error (Device Disconnected?): {e}")
+                # 一旦报错，立刻将自身状态置为断开，下次调用自动走重连
+                self.disconnect()
+                return False, None, None
 
-                    aligned_frames = aligned_frames.as_frame_set()
-                except OBError as e:
-                    logger.error(f"Alignment failed: {e}")
-                    return False, None, None
-            else:
-                aligned_frames = frames  # 如果没有滤波器，直接用原图
-
-            # 提取彩色和深度帧
-            color_frame = aligned_frames.get_color_frame()
-            depth_frame = aligned_frames.get_depth_frame()
-
-            # if color_frame and depth_frame:
-            #     return True, color_frame, depth_frame
-
-            if color_frame is not None and depth_frame is not None:
-                # 安全地验证帧数据
-                try:
-                    # 尝试获取数据以确保帧是有效的
-                    color_data = color_frame.get_data()
-                    depth_data = depth_frame.get_data()
-
-                    if color_data is not None and depth_data is not None:
-                        return True, color_frame, depth_frame
-                    else:
-                        logger.warning("Frame data is None")
-                        return False, None, None
-                except Exception as e:
-                    logger.error(f"Error validating frame data: {e}")
-                    return False, None, None
-
-        except OBError as e:
-            logger.error(f"Wait for frames error: {e} \n {traceback.format_exc()}")
-            # 【核心修改】: 一旦底层超时或报错，立刻触发隔离区切断状态
-            self.disconnect()
-        except Exception as e:
-            logger.error(f"Unexpected error getting frames: {e}\n {traceback.format_exc()}")
-            # 【核心修改】
-            self.disconnect()
-
-        return False, None, None
-
-    def flush_frames(self, num_frames=10):
+    def flush_frames(self, num_frames=5):
         """
         排空历史缓存帧，获取最新画面，并给自动曝光留出时间
         :param num_frames: 丢弃的帧数 (建议 3~5 帧)
         """
-        if not self.pipeline or not self.is_connected:
-            return
+        with self._lock:
+            if not self.pipeline or not self.is_connected:
+                return
 
-        logger.info(f"清理相机底层缓存队列，丢弃前 {num_frames} 帧...")
-        for _ in range(num_frames):
-            try:
-                # 设定极短的超时时间，把积压在内存里的图迅速抽走抛弃
-                frames = self.pipeline.wait_for_frames(10)
-                if frames:
-                    # 显式释放内存
-                    color = frames.get_color_frame()
-                    depth = frames.get_depth_frame()
-                    if color: del color
-                    if depth: del depth
-                    del frames
-            except Exception as e:
-                logger.info(f"flush frames error: {e}\n {traceback.format_exc()}")
-                pass
+            logger.info(f"清理相机底层缓存队列，丢弃前 {num_frames} 帧...")
+            for _ in range(num_frames):
+                try:
+                    # 设定极短的超时时间，把积压在内存里的图迅速抽走抛弃
+                    frames = self.pipeline.wait_for_frames(100)
+                    if frames:
+                        # 显式释放内存
+                        color = frames.get_color_frame()
+                        depth = frames.get_depth_frame()
+                        if color: del color
+                        if depth: del depth
+                        del frames
+                except Exception as e:
+                    logger.info(f"flush frames error: {e}\n {traceback.format_exc()}")
+                    pass
 
     def is_alive(self):
         """简单的链路健康检查"""
-        try:
-            # 尝试通过获取设备信息来判断链路是否正常
-            if self.is_connected and self.pipeline and self.ctx.query_devices().get_count() > 0:
-                return True
-        except Exception as e:
-            logger.info(f"camera is_alive error: {e}\n {traceback.format_exc()}")
-            pass
-        return False
+        with self._lock:
+            try:
+                # 尝试通过获取设备信息来判断链路是否正常
+                if self.is_connected and self.pipeline and self.ctx and self.ctx.query_devices().get_count() > 0:
+                    return True
+            except Exception as e:
+                logger.info(f"camera is alive error: {e}\n {traceback.format_exc()}")
+                pass
+            return False
 
     def diagnose_alignment_issue(self):
         """

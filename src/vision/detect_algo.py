@@ -122,16 +122,15 @@ class DetectAlgoService:
             try:
                 # 拔掉瞬间直接去取图会导致底层的 wait_for_frames 直接崩溃
                 if self.device.is_alive():
-                    ret, color, depth = self.device.get_frames()
+                    ret, color_img, depth_img = self.device.get_frames(timeout_ms=500)
                     if ret:
-                        logger.info(f"Camera keep alive worker, get frames ...")
-                        del color
-                        del depth
+                        logger.info(f"Camera keep alive worker, get img success")
+
             except Exception as e:
                 logger.info(f"keep_alive_worker error: {e} \n {traceback.format_exc()}")
                 pass
 
-            time.sleep(60)
+            time.sleep(15)
 
 
     def _save_worker(self):
@@ -226,14 +225,14 @@ class DetectAlgoService:
                         self.device.flush_frames(num_frames=3)
 
             # 2. 采集图像
-            success, color_frame, depth_frame = self.device.get_frames(timeout_ms=2000)
+            success, color_img, depth_img = self.device.get_frames(timeout_ms=2000)
             if not success:
                 last_err = "Failed to capture frames"
                 # time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
                 time.sleep(0.1)  # 等待约一帧的时间 (10fps的周期)
                 # 只有当连续多次（例如超过3次）都拿不到图时，才真正去重启相机
                 if attempt >= 2:
-                    logger.warning("Multiple consecutive frame drops, re-initializing pipeline...")
+                    logger.warning("Multiple consecutive frame drops, forcing disconnect...")
                     self.device.disconnect()
                     time.sleep(1.0) # 给 USB 驱动释放句柄的时间
                     # self.device.connect()
@@ -246,55 +245,7 @@ class DetectAlgoService:
                 return {"code": 0, "result": {"ok": 1, "coords": [0, 0, 0, 0]}, "err_msg": ""}
 
             try:
-                # 彩色图转换: RGB888 每个像素 3 字节 (uint8)
-                # color_frame.get_data() 是原始 buffer
-                # color_data = np.frombuffer(color_frame.get_data(), dtype=np.uint8)
-                # color_img = color_data.reshape((720, 1280, 3))
-                # color_img = np.frombuffer(color_frame.get_data(), dtype=np.uint8).reshape(
-                #     (self.height, self.width, self.channel)).copy()
-
-                f_width = color_frame.get_width()  # 动态获取当前帧的宽度
-                f_height = color_frame.get_height()  # 动态获取当前帧的高度
-
-                color_format = color_frame.get_format()
-                raw_data = np.frombuffer(color_frame.get_data(), dtype=np.uint8)
-
-                if color_format == OBFormat.MJPG:
-                    # 如果是 MJPG，使用 OpenCV 解码成 BGR
-                    bgr_img = cv2.imdecode(raw_data, cv2.IMREAD_COLOR)
-                    if bgr_img is None:
-                        raise ValueError("MJPG decode failed")
-                    # 转换为 RGB (因为你之前的逻辑是存图前转 BGR，或者算法需要 RGB)
-                    color_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-                elif color_format == OBFormat.RGB:
-                    # 只有格式确实是 RGB 时才能直接 reshape
-                    color_img = raw_data.reshape((f_height, f_width, 3)).copy()
-                else:
-                    # 处理其他可能的格式（如 YUYV）
-                    # 这里建议打印一下当前的格式，方便调试
-                    print(f"Unsupported format for direct reshape: {color_format}")
-                    logger.error(f"Unsupported format: {color_format}")
-                    # 这种情况下通常需要专门的转换函数
-                    return {"code": -1, "err_msg": f"Unsupported format {color_format}"}
-
-                # 深度图转换: Y16 每个像素 2 字节 (uint16)
-                # 使用 np.frombuffer 并指定 dtype=np.uint16
-                # depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16)
-                # depth_img = depth_data.reshape((f_height, f_width)).copy()
-
-                # depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
-                #     (f_height, f_width)).copy()
-
-                d_height = depth_frame.get_height()  # 获取深度帧实际高度
-                d_width = depth_frame.get_width()  # 获取深度帧实际宽度
-
-                depth_img = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
-                    (d_height, d_width)).copy()
-
-                # 本地持久化
-                # self._save_to_local(color_img, depth_img)
-
-                # 2. 将存图任务提交给后台队列 (非阻塞)
+                # 3. 将存图任务提交给后台队列 (非阻塞)
                 timestamp = int(time.time() * 1000)
                 try:
                     self.save_queue.put_nowait((color_img, depth_img, timestamp))
@@ -303,17 +254,10 @@ class DetectAlgoService:
                 except Exception as e:
                     logger.error(f"Error in image save queue: {e}")
 
-                # 5. 二进制处理 (传递给 C++ 算法)
-                # 直接获取原始内存 Buffer 的 bytes 形式
-                # rgb_binary = color_frame.get_data().tobytes()
-                # depth_binary = depth_frame.get_data().tobytes()
-
-                # 6. 调用 C++ 算法
-                # result = self.algo.detect(ptype, rgb_binary, depth_binary)
-                # return result
-
+                # 4. 调用算法检测
                 result = self.detector.detect(ptype, color_img, depth_img)
 
+                # 5. 绘图与展示
                 if self.depth_show:
                     timestamp = int(time.time() * 1000)
                     date_str = time.strftime("%Y%m%d", time.localtime(timestamp / 1000))
@@ -332,22 +276,13 @@ class DetectAlgoService:
                 logger.info(f"detect result : {result}")
                 detector_logger.info(f"detect result : {result}")
 
-                # 显式释放底层 C++ 帧缓冲！！非常重要！！
-                # 让 pyorbbecsdk 立即将 Buffer 归还给 SDK，防止缓存池枯竭
-                del color_frame
-                del depth_frame
-
                 return result
-
-                # return {"code": 0, "result": {"ok": 1, "coords": [0, 0, 0, 0]}, "err_msg": ""}
 
             except Exception as e:
                 last_err = str(e)
-                print(f"Error in image save queue: {traceback.format_exc()}")
                 logger.error(f"Processing error: {e} \n traceback: {traceback.format_exc()}")
-                # 如果发生异常，确保释放帧，防止内存泄漏
-                if 'color_frame' in locals(): del color_frame
-                if 'depth_frame' in locals(): del depth_frame
+                # 发生未知错误，防呆断开相机
+                self.device.disconnect()
 
         logger.info(f"Processing error: Max retries reached. {last_err}")
         return {"code": -1, "err_msg": f"Max retries reached. Last error: {last_err}"}
