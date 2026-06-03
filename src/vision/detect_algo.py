@@ -124,6 +124,9 @@ class DetectAlgoService:
                 #     if ret:
                 #         logger.info(f"Camera keep alive worker, get img success")
 
+                if not self.device.is_alive():
+                    logger.info(f">>>>>> Connection lost in keep alive worker ")
+
                 if self.device.ctx:
                     count = self.device.ctx.query_devices().get_count()
                     logger.info(f"Camera keep alive worker count: {count}")
@@ -241,15 +244,16 @@ class DetectAlgoService:
                 # get_frames失败，原因很多，SDK没在超时时间内拿到新帧/Align失败/MJPG解码失败/Depth Frame为空，都当作失败返回的
                 # 只有当连续多次（例如超过20次）都拿不到图时，才真正去重启相机
 
-                if consecutive_failures >= 20:
+                logger.info(f"consecutive_failures: {consecutive_failures}")
+                if consecutive_failures >= 10:
                     logger.warning("Multiple consecutive frame drops, forcing disconnect...")
                     self.device.disconnect()
                     consecutive_failures = 0 # 重置计数，等待下一轮重连
                     time.sleep(1.0) # 给 USB 驱动释放句柄的时间
 
                 # 判断设备是否掉线，真掉线，和 前面的 if consecutive_failures >= 20 类似
-                # if not self.device.is_alive():
-                #     logger.warning("Camera really lost")
+                if not self.device.is_alive():
+                    logger.warning("Camera really lost")
                 #     self.device.disconnect()
                 #     time.sleep(1.0)  # 给 USB 驱动释放句柄的时间
 
@@ -285,8 +289,8 @@ class DetectAlgoService:
                     result_img = self.detector.draw_result_with_rotated_box(depth_color, result)
                     # cv2.imshow("result-line", result_img)
 
-                    # if self.save_jpg:
-                    if save_img:
+                    if self.save_jpg:
+                    # if save_img:
                         cv2.imwrite(f"{path}/detect_result_horizontal_line_{timestamp}.jpg", result_img)
 
                     cv2.waitKey(0)
@@ -473,8 +477,8 @@ def main():
         start_time = round(time.time() * 1000)
         logger.info(f"Start Time: {start_time}")
         # response = service.execute_detection(ptype=const.photo_type_loading, detect=1)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
-        # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_aluminum)
