@@ -253,6 +253,15 @@ class Controller(QThread):
         # =======================================
         # 视觉测试
         # =======================================
+        # try:
+        #     alg_test_code = self.cfg_manager.get_alg_test_config()
+        #     if alg_test_code != 0:
+        #         algo_response = self.vision_service.execute_detection_midian_depth(alg_test_code)
+        #         logger.info(f"algo_response >>>>>>>> : {algo_response}")
+        # except Exception as e:
+        #     logger.info(f"loop once algo_response >>>>>>>> : {e}\n{traceback.format_exc()}")
+
+
         # vision_result = self.vision_service.execute_detection(ptype=4)
         # logger.info(f"vision result: {vision_result}")
 

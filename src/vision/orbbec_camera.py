@@ -271,6 +271,7 @@ class OrbbecCameraDevice:
         # 强制销毁其他相关配置对象
         self.config = None
         self.align_filter = None
+        self.ctx = None
 
     def disconnect(self):
         """主动断开设备"""
@@ -292,6 +293,29 @@ class OrbbecCameraDevice:
     #         self.pipeline = None
     #     self.config = None
     #     self.align_filter = None
+
+    def hardware_reset(self):
+        """
+        【核弹级恢复】当遇到 setXu failed 等底层死锁时，强制重启相机主板
+        """
+        with self._lock:
+            logger.critical(">>> 准备执行相机底层硬件重启 (Hardware Reboot) <<<")
+            try:
+                if self.ctx is not None:
+                    device_list = self.ctx.query_devices()
+                    if device_list.get_count() > 0:
+                        # 获取物理设备对象
+                        dev = device_list.get_device_by_index(0)
+                        logger.critical("向相机发送 Reboot 指令...")
+                        dev.reboot()  # 调用底层 C++ 接口强行重启相机主板
+                        logger.critical("Reboot 指令发送成功，相机即将掉线重建。")
+            except Exception as e:
+                logger.error(f"硬件重启指令发送失败: {e}")
+            finally:
+                # 无论指令是否发送成功，彻底清空上位机的内存对象
+                self._clean_resources()
+                self.ctx = None  # 杀掉 Context，逼迫 SDK 下次重新枚举 USB 树
+                self.is_connected = False
 
     # 底层直接转化为 Numpy 并销毁 C++ 对象
     def _convert_color_frame(self, color_frame):
@@ -326,9 +350,15 @@ class OrbbecCameraDevice:
                 return False, None, None
 
             try:
+                logger.info(
+                    f"wait_for_frames begin pipeline={id(self.pipeline)}"
+                )
                 frames = self.pipeline.wait_for_frames(timeout_ms)
                 if not frames:
                     return False, None, None
+                logger.info(
+                    f"wait_for_frames end frames={frames is not None}"
+                )
 
                 # 软对齐可能会因为光线突变偶发失败
                 # if self.align_filter:
@@ -370,7 +400,7 @@ class OrbbecCameraDevice:
                 return False, None, None
 
             except Exception as e:
-                logger.error(f"Wait for frames error (Device Disconnected?): {e}")
+                logger.error(f"Wait for frames error (Device Disconnected?): {e}\n{traceback.format_exc()}")
                 # 一旦报错，立刻将自身状态置为断开，下次调用自动走重连
                 self.disconnect()
                 return False, None, None
@@ -414,6 +444,17 @@ class OrbbecCameraDevice:
                 logger.info(f"camera is alive error: {e}\n {traceback.format_exc()}")
                 pass
             return False
+
+    def check_device_exist(self):
+        with self._lock:
+            try:
+                if self.ctx is None:
+                    return False
+
+                return self.ctx.query_devices().get_count() > 0
+            except Exception as e:
+                logger.info(f"check_device_exist error: {e}\n {traceback.format_exc()}")
+                return False
 
     def diagnose_alignment_issue(self):
         """

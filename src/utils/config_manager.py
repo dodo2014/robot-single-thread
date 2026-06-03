@@ -100,6 +100,10 @@ class ConfigManager:
                     return model
         return {}
 
+    def get_alg_test_config(self):
+        return self.data.get("alg_test", 0)
+
+
 # def main():
 #     cfg = ConfigManager()
 #     tool_model = cfg.get_current_tool_model()

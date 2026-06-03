@@ -127,11 +127,8 @@ class DetectAlgoService:
                 if not self.device.is_alive():
                     logger.info(f">>>>>> Connection lost in keep alive worker ")
 
-                if self.device.ctx:
-                    count = self.device.ctx.query_devices().get_count()
-                    logger.info(f"Camera keep alive worker count: {count}")
-                    if count == 0:
-                        logger.warning("camera removed")
+                if not self.device.check_device_exist():
+                    logger.warning("camera removed")
 
             except Exception as e:
                 logger.info(f"camera keep alive worker error: {e} \n {traceback.format_exc()}")
@@ -238,6 +235,7 @@ class DetectAlgoService:
             if not success:
                 consecutive_failures += 1
                 last_err = "Failed to capture frames"
+                logger.warning(f"获取图像失败，当前连续失败次数: {consecutive_failures}")
                 # time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
                 time.sleep(0.1)  # 等待约一帧的时间 (10fps的周期)
 
@@ -245,11 +243,27 @@ class DetectAlgoService:
                 # 只有当连续多次（例如超过20次）都拿不到图时，才真正去重启相机
 
                 logger.info(f"consecutive_failures: {consecutive_failures}")
-                if consecutive_failures >= 10:
+                if consecutive_failures >= 7:
                     logger.warning("Multiple consecutive frame drops, forcing disconnect...")
                     self.device.disconnect()
+                    self.device.ctx = None
                     consecutive_failures = 0 # 重置计数，等待下一轮重连
-                    time.sleep(1.0) # 给 USB 驱动释放句柄的时间
+                    time.sleep(2.0) # 给 USB 驱动释放句柄的时间
+
+
+                    ###################################################
+                    # 硬件重启
+                    ###################################################
+                    # logger.critical("检测到连续掉帧或底层死锁，触发硬件重启机制！")
+                    # # 调用刚才写的核弹级重启
+                    # self.device.hardware_reset()
+                    #
+                    # # 给相机主板重启和 USB 重新枚举留出充足的时间 (非常重要)
+                    # logger.info("等待相机主板重启并重新连接 Windows (5秒)...")
+                    # time.sleep(5.0)
+                    #
+                    # consecutive_failures = 0  # 重置计数，下一轮 for 将自动走 connect()
+                    ###################################################
 
                 # 判断设备是否掉线，真掉线，和 前面的 if consecutive_failures >= 20 类似
                 if not self.device.is_alive():
@@ -478,9 +492,9 @@ def main():
         logger.info(f"Start Time: {start_time}")
         # response = service.execute_detection(ptype=const.photo_type_loading, detect=1)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
-        # response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_aluminum)
         logger.info(f"response : {response}")
         print(response)
