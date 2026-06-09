@@ -98,7 +98,7 @@ class DetectAlgoService:
             self.device.disconnect()
 
             # 2. 给操作系统 USB 驱动释放资源的喘息时间
-            time.sleep(1.0)
+            time.sleep(3.0)
 
             # 3. 重新连接
             success, msg = self.device.connect()
@@ -166,7 +166,7 @@ class DetectAlgoService:
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"Error in save worker: {e}")
+                # print(f"Error in save worker: {e}")
                 logger.error(f"Error in save worker: {e}")
 
     def _save_to_local(self, color_arr, depth_arr):
@@ -205,19 +205,44 @@ class DetectAlgoService:
         """
         last_err = ""
         consecutive_failures = 0
+        recovery_failures = 0
 
-        for attempt in range(self.max_retries):
-            # 1. 检查并尝试重连
+        # 放大重试循环次数，给硬件重置留足空间
+        MAX_RECOVERY_ATTEMPTS = 50
+
+        # for attempt in range(self.max_retries):
+        for attempt in range(MAX_RECOVERY_ATTEMPTS):
+            # ========================================================
+            # 阶段 1：物理连接与恢复
+            # ========================================================
+
             if not self.device.is_alive():
                 logger.info(f"Connection lost, retrying to connect (Attempt {attempt + 1})...")
 
-                # 确保彻底断开旧句柄
-                self.device.disconnect()
-                time.sleep(0.5)
-
-                con_res, msg = self.device.connect()
-                if not con_res:
+                # 检查并尝试重连
+                success, msg = self.device.connect()
+                if not success:
                     last_err = msg
+                    recovery_failures += 1
+                    logger.warning(f"Connect failed. Recovery failure count: {recovery_failures}")
+
+                    # 【核心修改】设备消失或连不上时，触发核弹重启
+                    if recovery_failures >= 10:
+                        logger.critical(">>> 连续 10 次无法连接设备，触发底层硬件重启 (Hardware Reboot) <<<")
+                        if hasattr(self.device, 'hardware_reset'):
+                            self.device.hardware_reset()
+                        else:
+                            self.device.disconnect()
+
+                        logger.info("等待 6 秒让 USB 重新枚举...")
+                        time.sleep(6.0)
+
+                        # 重启后，重置一点故障数，给它机会走正常的 connect 流程
+                        # 比如退回到 5，如果还是连不上，5次之后又会重启
+                        recovery_failures = 5
+                        continue
+
+                    # 常规连接失败，睡 1 秒后重试
                     time.sleep(1.0)
                     continue
                 else:
@@ -229,52 +254,77 @@ class DetectAlgoService:
                     # if hasattr(self.device, 'flush_frames'):
                     self.device.flush_frames(num_frames=2)
 
-            # 2. 采集图像
+            # ========================================================
+            # 阶段 2：采集图像
+            # ========================================================
             success, color_img, depth_img = self.device.get_frames(timeout_ms=2000)
 
             if not success:
-                consecutive_failures += 1
+                # consecutive_failures += 1
+
+                recovery_failures += 1
+
                 last_err = "Failed to capture frames"
-                logger.warning(f"获取图像失败，当前连续失败次数: {consecutive_failures}")
+                logger.warning(f"获取图像失败，当前连续失败次数: {recovery_failures}")
                 # time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
                 time.sleep(0.1)  # 等待约一帧的时间 (10fps的周期)
 
                 # get_frames失败，原因很多，SDK没在超时时间内拿到新帧/Align失败/MJPG解码失败/Depth Frame为空，都当作失败返回的
                 # 只有当连续多次（例如超过20次）都拿不到图时，才真正去重启相机
 
-                logger.info(f"consecutive_failures: {consecutive_failures}")
-                if consecutive_failures >= 7:
-                    logger.warning("Multiple consecutive frame drops, forcing disconnect...")
+                # if consecutive_failures == 7:
+
+                # 惩罚级别 1：连续几次拿不到图，说明流卡死了，断开强制重建
+                if recovery_failures == 7:
+                    # logger.warning("Multiple consecutive frame drops, forcing disconnect...")
+                    logger.warning(f">>> 连续 {recovery_failures} 次掉帧，执行 Pipeline 软重启 <<<")
                     self.device.disconnect()
-                    self.device.ctx = None
-                    consecutive_failures = 0 # 重置计数，等待下一轮重连
-                    time.sleep(2.0) # 给 USB 驱动释放句柄的时间
+                    # self.device.ctx = None
+                    # consecutive_failures = 0 # 重置计数，等待下一轮重连
+                    time.sleep(1.0) # 给 USB 驱动释放句柄的时间
+
+                    continue
 
 
+                # if consecutive_failures == 7:
+                # 惩罚级别 2：流卡死极度严重，触发核弹重启
+                elif recovery_failures >= 15:
                     ###################################################
                     # 硬件重启
                     ###################################################
-                    # logger.critical("检测到连续掉帧或底层死锁，触发硬件重启机制！")
-                    # # 调用刚才写的核弹级重启
+                    logger.critical(f"检测到{recovery_failures}次连续掉帧或底层死锁，触发硬件重启机制！")
+                    # 调用刚才写的核弹级重启
                     # self.device.hardware_reset()
-                    #
-                    # # 给相机主板重启和 USB 重新枚举留出充足的时间 (非常重要)
-                    # logger.info("等待相机主板重启并重新连接 Windows (5秒)...")
-                    # time.sleep(5.0)
-                    #
+                    if hasattr(self.device, 'hardware_reset'):
+                        self.device.hardware_reset()
+                    else:
+                        self.device.disconnect()
+
+                    # 给相机主板重启和 USB 重新枚举留出充足的时间 (非常重要)
+                    logger.info("等待相机主板重启并重新连接 Windows (6秒)...")
+                    time.sleep(6.0)
+
                     # consecutive_failures = 0  # 重置计数，下一轮 for 将自动走 connect()
+
+                    # 重启后，给重连逻辑留出空间
+                    recovery_failures = 2
+                    continue
                     ###################################################
 
                 # 判断设备是否掉线，真掉线，和 前面的 if consecutive_failures >= 20 类似
-                if not self.device.is_alive():
-                    logger.warning("Camera really lost")
-                #     self.device.disconnect()
-                #     time.sleep(1.0)  # 给 USB 驱动释放句柄的时间
+                # if not self.device.is_alive():
+                #     logger.warning("Camera really lost")
 
+                # 普通失败，进入下一轮重试
                 continue
 
-            # 成功拿到图，清零失败计数器
-            consecutive_failures = 0
+            # ========================================================
+            # 阶段 3：成功拿到图，执行业务逻辑
+            # ========================================================
+            # 走到这里，说明物理层和流通道全通了，彻底清零故障累加器
+
+            # consecutive_failures = 0
+            recovery_failures = 0
 
             if not detect:
                 logger.info(f"Detect denied ...")
@@ -307,7 +357,7 @@ class DetectAlgoService:
                     # if save_img:
                         cv2.imwrite(f"{path}/detect_result_horizontal_line_{timestamp}.jpg", result_img)
 
-                    cv2.waitKey(0)
+                    # cv2.waitKey(0)
 
                 logger.info(f"detect result : {result}")
                 detector_logger.info(f"detect result : {result}")
@@ -355,7 +405,7 @@ class DetectAlgoService:
                 return {"code":-99, "err_msg":f"检测异常: 系统急停"}
 
             result = self.execute_detection(ptype, detect=1)  # 可以加上save_img=False节省时间
-            print(f"result is : {result}")
+            # print(f"result is : {result}")
 
             if result["code"] == 0:
                 consecutive_failures = 0  # 成功则重置失败计数
@@ -376,7 +426,7 @@ class DetectAlgoService:
             # 给底层 USB 留出喘息时间，避免阻塞 (30fps = 33ms 一张)
             # time.sleep(0.01)
 
-        print("#########################################")
+        # print("#########################################")
 
         if len(results) == 0:
             return {"code":-99, "err_msg":f"检测异常: 中位数处理返回空数组"}
@@ -493,8 +543,8 @@ def main():
         # response = service.execute_detection(ptype=const.photo_type_loading, detect=1)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_loading)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_unloading)
-        # response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
-        response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
+        response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_aluminum)
         logger.info(f"response : {response}")
         print(response)
@@ -517,34 +567,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    # results = [
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [0.0, 0.0, 0.0, 0.0], 'exists': 2}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 17.85, 320, -0.5100000000000051], 'exists': 1},
-    #      'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -5.22, 320, 0.91], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [0.0, 0.0, 0.0, 0.0], 'exists': 2}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -2.61, 320, 3.37], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 9.58, 320, 4.11], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 17.85, 320, 2.38], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -3.48, 320, 2.23], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 16.11, 320, 2.31], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -6.53, 320, 2.39], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, -4.35, 320, 0.89], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [0.0, 0.0, 0.0, 0.0], 'exists': 2}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.2, -4.37, 321, 0.54], 'exists': 1}, 'err_msg': ''},
-    #     {'code': 0, 'result': {'ptype': 2, 'coords': [26.12, 16.54, 320, -1.1099999999999994], 'exists': 1},
-    #      'err_msg': ''},
-    # ]
-    # print(get_midian(results))
-
-    # dev = OrbbecCameraDevice()
-    # success, msg = dev.connect()
-    # if success:
-    #     print("相机连接成功！")
-    #     ret, color, depth = dev.get_frames()
-    #     if ret:
-    #         print("获取图像帧成功！")
-    #     dev.disconnect()
-    # else:
-    #     print(f"连接失败: {msg}")

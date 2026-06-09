@@ -3,6 +3,7 @@ import traceback
 import time
 import threading
 import cv2
+import gc
 import numpy as np
 from pyorbbecsdk import (AlignFilter, Pipeline, Config, Context, OBError,
                          OBFormat, OBStreamType, OBAlignMode, OBSensorType)
@@ -54,6 +55,8 @@ class OrbbecCameraDevice:
 
             if self.align_filter is None:
                 self.align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
+
+
 
             # 1. 获取彩色传感器(COLOR_SENSOR)的配置列表
             color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
@@ -177,6 +180,37 @@ class OrbbecCameraDevice:
                 return False, "In reconnect cooldown"
             self._last_reconnect_time = now
 
+            if self.ctx is None:
+                self.ctx = Context()
+
+            ######################################
+            # 开启固件日志，下面的代码注释掉
+            # 在工作环境目录D:\workspace\projects\robot-single-thread\.venv\Lib\site-packages
+            # 文件OrbbecSDKConfig.xml中，FileLogLevel改为0即可
+            ######################################
+            # device_list = self.ctx.query_devices()
+            #
+            # dev = device_list.get_device_by_index(0)
+            # # logger.info(f"Firmware Version: {dev.get_device_info().firmware_version()}")
+            # try:
+            #     dev.enable_firmware_log(True)
+            #     logger.info("Enable firmware log")
+            # except Exception as e:
+            #     logger.warning(e)
+
+            # 新增：等待设备枚举，最多等 timeout 秒
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                count = self.ctx.query_devices().get_count()
+                if count > 0:
+                    break
+                time.sleep(0.5)
+
+            if count == 0:
+                self.disconnect()
+                self.ctx = None
+                return False, "No device connected"
+
             try:
                 # 如果 Context 丢了，重新创建
                 if not hasattr(self, "ctx") or self.ctx is None:
@@ -194,6 +228,26 @@ class OrbbecCameraDevice:
                     self.ctx = None
 
                     return False, "No device connected"
+
+                # =========================================================
+                # 3. 【新增：僵尸设备探测区】
+                # 虽然系统看到了设备，但它可能已经处于死机(Bad Magic)状态
+                # =========================================================
+                try:
+                    # 获取真实的物理设备对象
+                    dev = device_list.get_device_by_index(0)
+                    # 主动向相机要一次 DeviceInfo，强制触发 USB 底层真实通讯！
+                    # 如果此时相机内部芯片已死，这里会立刻抛出 OBError
+                    _ = dev.get_device_info()
+                except Exception as dev_e:
+                    logger.critical(f"捕获到假死/僵尸设备 (可能出现 Bad Magic): {dev_e}")
+                    self.disconnect()
+                    # 既然设备死了，必须把 Context 扬了，迫使下次重建触发 USB 重置
+                    self.ctx = None
+                    # 强行休息 2 秒，给 Windows 足够的时间把这个废弃的 USB 节点踢下线
+                    time.sleep(2.0)
+                    return False, "Zombie device detected and killed"
+                # =========================================================
 
                 # 如果之前是处于已连接但卡死的状态，必须先执行一次硬清理
                 # 不要尝试直接去 stop 一个旧的 pipeline，直接走毁灭流程重建最安全
@@ -221,6 +275,8 @@ class OrbbecCameraDevice:
 
             except Exception as e:
                 self.disconnect()
+                # 终极防线：遇到意料之外的严重崩溃，连 Context 一起销毁，保证环境纯净
+                self.ctx = None
                 logger.error(f"SDK Error during connect: {e}")
                 return False, str(e)
 
@@ -270,7 +326,12 @@ class OrbbecCameraDevice:
 
         # 强制销毁其他相关配置对象
         self.config = None
-        self.align_filter = None
+        # self.align_filter = None
+        # 显式销毁对齐滤波器，释放可能泄漏的 C++ 内存
+        if self.align_filter is not None:
+            del self.align_filter
+            self.align_filter = None
+
         self.ctx = None
 
     def disconnect(self):
@@ -294,6 +355,19 @@ class OrbbecCameraDevice:
     #     self.config = None
     #     self.align_filter = None
 
+    def haraware_reset_simulation(self):
+        """模拟重启主板"""
+        with self._lock:
+            logger.critical("hardware reset start")
+
+            self.disconnect()
+
+            self.ctx = None
+
+            self.is_connected = False
+
+            time.sleep(8)
+
     def hardware_reset(self):
         """
         【核弹级恢复】当遇到 setXu failed 等底层死锁时，强制重启相机主板
@@ -316,6 +390,70 @@ class OrbbecCameraDevice:
                 self._clean_resources()
                 self.ctx = None  # 杀掉 Context，逼迫 SDK 下次重新枚举 USB 树
                 self.is_connected = False
+
+    # def hardware_reset(self):
+    #
+    #     with self._lock:
+    #
+    #         logger.critical("hardware reboot start")
+    #
+    #         old_ctx = self.ctx
+    #
+    #         # 先把Python对象全部废掉
+    #         self.pipeline = None
+    #         self.config = None
+    #         self.align_filter = None
+    #
+    #         self.ctx = None
+    #         self.is_connected = False
+    #
+    #         gc.collect()
+    #
+    #         try:
+    #             if old_ctx:
+    #
+    #                 devs = old_ctx.query_devices()
+    #
+    #                 if devs.get_count() > 0:
+    #                     dev = devs.get_device_by_index(0)
+    #
+    #                     logger.critical("send reboot")
+    #
+    #                     dev.reboot()
+    #
+    #                     logger.critical("reboot success")
+    #
+    #         except Exception as e:
+    #             logger.error(e)
+
+    # def hardware_reset(self):
+    #
+    #     with self._lock:
+    #
+    #         logger.critical("hardware reboot start")
+    #
+    #         old_ctx = self.ctx
+    #
+    #         try:
+    #             # 先释放SDK对象
+    #             self._clean_resources()
+    #
+    #             time.sleep(0.5)
+    #
+    #             if old_ctx:
+    #                 devs = old_ctx.query_devices()
+    #
+    #                 if devs.get_count() > 0:
+    #                     dev = devs.get_device_by_index(0)
+    #                     logger.critical("向相机发送 Reboot 指令...")
+    #                     dev.reboot()
+    #                     logger.critical("Reboot 指令发送成功，相机即将掉线重建。")
+    #         except Exception as e:
+    #             logger.error(e)
+    #
+    #         finally:
+    #             self.ctx = None
+    #             self.is_connected = False
 
     # 底层直接转化为 Numpy 并销毁 C++ 对象
     def _convert_color_frame(self, color_frame):
@@ -361,24 +499,25 @@ class OrbbecCameraDevice:
                 )
 
                 # 软对齐可能会因为光线突变偶发失败
-                # if self.align_filter:
-                #     try:
-                #         aligned_frames = self.align_filter.process(frames)
-                #         if aligned_frames:
-                #             frames = aligned_frames.as_frame_set()
-                #         else:
-                #             # 【修正】如果对齐失败，记录警告，但不要断开，直接视为这一次取帧失效
-                #             logger.warning("Align filter failed to process frames, skipping this frame.")
-                #             return False, None, None
-                #     except OBError as e:
-                #         logger.warning(f"Align filter OBError: {e}")
-                #         return False, None, None
+                if self.align_filter:
+                    try:
+                        aligned_frames = self.align_filter.process(frames)
+                        if aligned_frames:
+                            frames = aligned_frames.as_frame_set()
+                        else:
+                            # 如果对齐失败，记录警告，但不要断开，直接视为这一次取帧失效
+                            #  SDK 对齐失败，直接跳过当前帧，不认定为断线
+                            logger.warning("Align filter failed to process frames, skipping this frame.")
+                            return False, None, None
+                    except OBError as e:
+                        logger.warning(f"Align filter OBError: {e}")
+                        return False, None, None
 
                 # 对齐处理
-                if self.align_filter:
-                    aligned_frames = self.align_filter.process(frames)
-                    if aligned_frames:
-                        frames = aligned_frames.as_frame_set()
+                # if self.align_filter:
+                #     aligned_frames = self.align_filter.process(frames)
+                #     if aligned_frames:
+                #         frames = aligned_frames.as_frame_set()
 
                 # 提取彩色和深度帧
                 color_frame = frames.get_color_frame()

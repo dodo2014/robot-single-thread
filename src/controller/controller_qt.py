@@ -6,7 +6,6 @@ from src.utils.udp_client import UdpClient
 from src.core.kinematics import ScaraKinematics
 from src.core.trajectory import TrajectoryV2
 from src.consts import const
-# from src.vision.jxbpipeline import VisionSystem
 from src.vision.detect_algo import DetectAlgoService
 from src.core.tcp import compute_gripper_target
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -18,6 +17,7 @@ import copy
 import socket
 import math
 import functools
+import threading
 
 # ===================== 定义带参数装饰器 =====================
 def process_action(action_name: str):
@@ -73,6 +73,9 @@ class Controller(QThread):
         # 存储实时电机状态 [J1, J2, J3, J4], 初始化为 0.0，供 UI 读取
         self.last_joint_status = [0.0, 0.0, 0.0, 0.0]
 
+        self._motor_polling_running = False
+        self._motor_polling_thread = None
+
         self.loop_count = 0
 
         # 上料拍照位置索引
@@ -96,6 +99,44 @@ class Controller(QThread):
         cfg = self.cfg_manager.get_plc_config()
         self.plc = PLCClient(cfg["ip"], cfg["port"])
         logger.info(cfg)
+
+    def _start_motor_poller(self):
+        """启动电机状态独立轮询线程"""
+        self._motor_polling_running = True
+        self._motor_polling_thread = threading.Thread(target=self._motor_status_poller, daemon=True)
+        self._motor_polling_thread.start()
+        logger.info("电机状态轮询线程已启动 (200ms 间隔)")
+
+    def _motor_status_poller(self):
+        """独立线程：每 200ms 从 PLC 读取实时关节角度，更新 UI 显示变量"""
+        while self._motor_polling_running:
+            try:
+                if self.plc and self.plc.is_connected:
+                    regs = self.plc.read_holding_registers(
+                        const.ADDR_FEEDBACK_START, const.FEEDBACK_LEN
+                    )
+                    if regs and len(regs) == const.FEEDBACK_LEN:
+                        j1 = PLCClient.registers_to_float(regs[0:2])
+                        j2 = PLCClient.registers_to_float(regs[2:4])
+                        j3 = PLCClient.registers_to_float(regs[4:6])
+                        j4 = PLCClient.registers_to_float(regs[6:8])
+
+                        self.last_joint_status = [j1, j2, j3, j4]
+
+                        # 轻量正运动学，更新笛卡尔坐标
+                        fk_res = ScaraKinematics().forward_kinematics(
+                            j1, j2, j3, j4,
+                            self.l1, self.l2, self.z0, self.nn3
+                        )
+                        if fk_res:
+                            self.last_axis_status = [
+                                fk_res['x'], fk_res['y'],
+                                fk_res['z'], fk_res['r']
+                            ]
+            except Exception:
+                pass  # 轮询线程吞掉所有异常，绝不干扰主线程
+            time.sleep(0.2)
+
 
     def run(self):
         # self.plc.connect()
@@ -130,7 +171,12 @@ class Controller(QThread):
         self.reset_loding_index()
         self.running = True  # 标记运行
 
+        self._start_motor_poller() # 启动独立电机状态轮询线程
+
         while self.running:
+            # algo_response = self.vision_service.execute_detection_midian_depth(const.photo_type_find_head)
+            # logger.info(f"algo_response >>>>>>>> : {algo_response}")
+
             try:
                 self.loop_once()
                 # 轮询间隔
@@ -149,6 +195,11 @@ class Controller(QThread):
     def stop_service(self):
         logger.info("正在停止控制服务...")
         self.running = False
+
+        # ---- 新增：停止独立轮询线程 ----
+        self._motor_polling_running = False
+        if self._motor_polling_thread:
+            self._motor_polling_thread.join(timeout=2.0)
 
         # 关闭视觉服务，释放相机资源
         if self.vision_service:
@@ -227,6 +278,7 @@ class Controller(QThread):
 
                     regs_wait = self.plc.read_holding_registers(addr, 1)
                     if regs_wait:
+                        # logger.info(f"监测恢复信号：{regs_wait[0]}")
                         val = regs_wait[0]
                         # 判断恢复信号
                         if val == const.VAL_RESUME_REQ:  # 11
@@ -248,7 +300,7 @@ class Controller(QThread):
         return is_paused_once
 
     def loop_once(self):
-        realtime_point = self.get_realtime_point(loop=1)
+        # realtime_point = self.get_realtime_point(loop=1)
 
         # =======================================
         # 视觉测试
@@ -256,8 +308,8 @@ class Controller(QThread):
         # try:
         #     alg_test_code = self.cfg_manager.get_alg_test_config()
         #     if alg_test_code != 0:
-        #         algo_response = self.vision_service.execute_detection_midian_depth(alg_test_code)
-        #         logger.info(f"algo_response >>>>>>>> : {algo_response}")
+        # algo_response = self.vision_service.execute_detection_midian_depth(const.photo_type_find_head)
+        # logger.info(f"algo_response >>>>>>>> : {algo_response}")
         # except Exception as e:
         #     logger.info(f"loop once algo_response >>>>>>>> : {e}\n{traceback.format_exc()}")
 
@@ -278,7 +330,7 @@ class Controller(QThread):
         e_stop_regs = self.plc.read_holding_registers(self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR), 1)
 
         if self.loop_count % const.loop_log_rate == 0:
-            logger.info(f"current point: {realtime_point}")
+            # logger.info(f"current point: {realtime_point}")
             logger.info(
                 f"emergency addr: {self.plc.map_modbus_address(const.ADDR_ESTOP_MONITOR)}, stop regs : {e_stop_regs}")
 
@@ -605,7 +657,7 @@ class Controller(QThread):
 
                 logger.info(
                     f"坐标({xe},{ye},{ze},{te}) -> "
-                    f"关节({ik_res['the1']:.2f}, {ik_res['the2']:.2f}),{ik_res['the3']:.2f},{ik_res['th4']:.2f}")
+                    f"关节({ik_res['the1']:.2f}, {ik_res['the2']:.2f},{ik_res['the3']:.2f},{ik_res['th4']:.2f})")
             else:
                 logger.error(f"逆解失败：动作{process_addr}目标点{coords}不可达")
                 success_flag = False
@@ -1141,6 +1193,7 @@ class Controller(QThread):
 
             logger.error(f"执行移动片段 -> {target_name} 等待到位超时")
             return False
+        logger.info(f"收到plc反馈12")
 
         # 6. 更新内存中的位置记录
         self.last_motion_end_point = target_point
@@ -2648,8 +2701,10 @@ class Controller(QThread):
                 logger.error("精拍发现位置为空！(可能因视觉 X 畸变导致跑偏)")
                 self.plc.write_register(process_addr, 16)
                 if self.wait_for_plc_val(process_addr, 20, timeout=7200):
-                    return False  # 退出，重新拍端头找
+                    # return False  # 退出，重新拍端头找
+                    continue  # 可能是光线引起深度丢失，还是要重新拍照
                 return False
+
 
             else:
                 self.plc.write_register(process_addr, 16)
@@ -2701,17 +2756,17 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 首次初始位去缓存位拍照
+    @process_action("首次初始位去缓存位拍照")
     def handle_process_0x40082(self, process_addr, value):
         # 状态码为整数
 
-        if value != 10:
-            return
+        # if value != 10:
+        #     return
 
-        plc_addr = self.plc.map_modbus_address(process_addr)
-        logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 首次初始位去缓存位拍照")
+        # plc_addr = self.plc.map_modbus_address(process_addr)
+        # logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 首次初始位去缓存位拍照")
 
-        # 起始点定义为上一个动作的结束点
-        # process_start_point = self.last_motion_end_point
+        # 起始点使用实时点位
         process_start_point = self.get_realtime_point()
         # if not process_start_point:
         #     # 如果没有，使用原点
@@ -2777,12 +2832,13 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 首次臂去下料位拍照
+    @process_action("首次臂去下料位拍照")
     def handle_process_0x40084(self, process_addr, value):
-        if value != 10:
-            return
-
-        plc_addr = self.plc.map_modbus_address(process_addr)
-        logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 首次臂去下料位拍照")
+        # if value != 10:
+        #     return
+        #
+        # plc_addr = self.plc.map_modbus_address(process_addr)
+        # logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 首次臂去下料位拍照")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40083/262275
@@ -2811,12 +2867,13 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 缓存拍照位回初始位
+    @process_action("缓存拍照位回初始位")
     def handle_process_0x40085(self, process_addr, value):
-        if value != 10:
-            return
-
-        plc_addr = self.plc.map_modbus_address(process_addr)
-        logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 缓存拍照位回初始位")
+        # if value != 10:
+        #     return
+        #
+        # plc_addr = self.plc.map_modbus_address(process_addr)
+        # logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 缓存拍照位回初始位")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40084/262276
@@ -2845,11 +2902,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 初始位去工装位吹气（加工完开门）
+    @process_action("初始位去工装位吹气（加工完开门）")
     def handle_process_0x40086(self, process_addr, value):
-        if value != 10:
-            return
-        plc_addr = self.plc.map_modbus_address(process_addr)
-        logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 初始位去工装位吹气（加工完开门）")
+        # if value != 10:
+        #     return
+        # plc_addr = self.plc.map_modbus_address(process_addr)
+        # logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 初始位去工装位吹气（加工完开门）")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40085/262277
@@ -2879,11 +2937,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 工装吹气位去工装位拍照
+    @process_action("工装吹气位去工装位拍照")
     def handle_process_0x40087(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工料位拍照")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工料位拍照")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40086/262278
@@ -2914,11 +2973,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     #  工装拍照位去工装位取料
+    @process_action("工装拍照位去工装位取料")
     def handle_process_0x40088(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工位取料")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工位取料")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40087/262279
@@ -2955,11 +3015,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 工装取料位去缓存位
+    @process_action("工装取料位去缓存位放料")
     def handle_process_0x40089(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去缓存位")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去缓存位")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40088/262280
@@ -3000,11 +3061,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 缓存位去工装位吹气
+    @process_action("缓存放料位去空装位吹气")
     def handle_process_0x4008A(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工位吹气")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工位吹气")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40089/262281
@@ -3035,11 +3097,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 空装吹气位去空装位拍照(铝屑识别)
+    @process_action("空装吹气位去空装位拍照(识别铝屑)")
     def handle_process_0x4008B(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工位拍照")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去加工位拍照")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x4008A/262282
@@ -3072,6 +3135,7 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 工装拍照位去上料位拍照
+    @process_action("空装拍照位去上料位拍照")
     def handle_process_0x4008C(self, process_addr, value):
         """
         上料位置拍照，先从工装位置运动到普通点(安全点)，再执行拍照阵列搜索运动
@@ -3080,10 +3144,10 @@ class Controller(QThread):
         :return:
         """
 
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去上料位拍照")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去上料位拍照")
 
         # =========================================================
         # 1. 优先移动到固定的安全过渡点 P (例如门前等待位)
@@ -3330,10 +3394,11 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 上料取料去位加工位放料
+    @process_action("上料取料去位空装位放料")
     def handle_process_0x4008E(self, process_addr, value):
-        if value != 10:
-            return
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程: 臂去加工位放料 (含安全回撤)")
+        # if value != 10:
+        #     return
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程: 臂去加工位放料 (含安全回撤)")
 
         # ==========================================
         # 步骤 1: 确定关键点
@@ -3344,24 +3409,7 @@ class Controller(QThread):
         # 为了绝对安全，强烈建议这里读取一次实时坐标！防止PLC夹紧过程中机械臂有微动。
         start_point = self.get_realtime_point()
 
-        """
-        # 1.2 安全中间点 (Safe): P0
-        # P0 是动作 76 (0x4008C) 的最后一个点
-        addr_p0 = 0x4008C
-        cfg_p0 = self.cfg_manager.get_process_config(hex(addr_p0).upper()).get("points")
-        if not cfg_p0:
-            logger.error("无法获取安全回撤点(动作76配置为空)")
-            return
-        
-        # 构造 P0 点对象
-        p0_coords = cfg_p0[-1]["coords"]
-        p0_point = {
-            "name": "Safe_Retract_P0",
-            "coords": p0_coords,
-            "photo": 0
-        }
-        """
-
+        # 安全点，抬升到安全高度
         safe_point = copy.deepcopy(start_point)
         safe_point["coords"][2] = const.loading_safe_z
 
@@ -3394,11 +3442,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 空装放料位去缓存位检测（关门加工）
+    @process_action("空装放料位去缓存位检测（关门加工）")
     def handle_process_0x4008F(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去缓存拍照位检测")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去缓存拍照位检测")
 
         # # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x4008E/262286
@@ -3442,11 +3491,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 臂缓存位取料
+    @process_action("放料拍照位去缓存位取料")
     def handle_process_0x40091(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去缓存位取料")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去缓存位取料")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x4008F/262287
@@ -3478,11 +3528,12 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 缓存检测去放料位拍照
+    @process_action("缓存检测位去放料位拍照")
     def handle_process_0x40090(self, process_addr, value):
-        if value != 10:
-            return
-
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去放料位拍照")
+        # if value != 10:
+        #     return
+        #
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程:臂去放料位拍照")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40090/262288
@@ -3616,6 +3667,7 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 臂去放料位放料
+    @process_action("缓存取料位去放料位放料")
     def handle_process_0x40092(self, process_addr, value):
         """
         下料点位的计算，两种方案
@@ -3625,8 +3677,8 @@ class Controller(QThread):
         :param value:
         :return:
         """
-        if value != 10:
-            return
+        # if value != 10:
+        #     return
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
         last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40091/262289
@@ -3733,10 +3785,11 @@ class Controller(QThread):
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
     # 放料位去初始位
+    @process_action("放料位去初始位")
     def handle_process_0x40093(self, process_addr, value):
-        if value != 10:
-            return
-        logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程: 放料位回等待位")
+        # if value != 10:
+        #     return
+        # logger.info(f"动作{hex(process_addr)} 收到请求 {value}，开始执行流程: 放料位回等待位")
 
         # ==========================================
         # 步骤 1: 确定关键点
