@@ -636,7 +636,7 @@ class Controller(QThread):
         coords = point.get("coords", [0, 0, 0, 0])
         elbow_config = point.get("config")
         xe, ye, ze, te = coords[0], coords[1], coords[2], coords[3]
-        logger.info(f"发送坐标 {name}: {xe},{ye},{ze},{te}")
+        logger.info(f"\n发送坐标 {name}: {xe},{ye},{ze},{te}")
         try:
             # 逆解运算
             ik_res = ScaraKinematics.inverse_kinematics_v2(xe, ye, ze, te, self.l1, self.l2, self.z0, self.nn3,
@@ -658,6 +658,7 @@ class Controller(QThread):
                 logger.info(
                     f"坐标({xe},{ye},{ze},{te}) -> "
                     f"关节({ik_res['the1']:.2f}, {ik_res['the2']:.2f},{ik_res['the3']:.2f},{ik_res['th4']:.2f})")
+                logger.info(f"发送完成\n")
             else:
                 logger.error(f"逆解失败：动作{process_addr}目标点{coords}不可达")
                 success_flag = False
