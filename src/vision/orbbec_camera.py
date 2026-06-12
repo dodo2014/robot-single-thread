@@ -31,6 +31,14 @@ class OrbbecCameraDevice:
         self._last_reconnect_time = 0
         self._reconnect_cooldown = 3.0  # 3秒内禁止重复发起连接
 
+        # 帧率健康监控
+        self._frame_time_history = [] # 最近 N 帧成功的时间戳
+        self._frame_rate_threshold = 2.0  # 低于 2fps 视为流异常
+
+        # 定期深冲洗防 RTP/UDP 缓冲区饱和
+        self._last_deep_flush_time = 0
+        self._deep_flush_interval = 600  # 每 10 分钟深冲洗一次
+
     # def _on_device_changed(self, removed_list, added_list):
     #     """设备插拔回调（底层SDK通知）"""
     #     for dev in added_list:
@@ -369,92 +377,105 @@ class OrbbecCameraDevice:
 
             time.sleep(8)
 
-    def hardware_reset(self):
-        """
-        【核弹级恢复】当遇到 setXu failed 等底层死锁时，强制重启相机主板
-        """
-        with self._lock:
-            logger.critical(">>> 准备执行相机底层硬件重启 (Hardware Reboot) <<<")
-            try:
-                if self.ctx is not None:
-                    device_list = self.ctx.query_devices()
-                    if device_list.get_count() > 0:
-                        # 获取物理设备对象
-                        dev = device_list.get_device_by_index(0)
-                        logger.critical("向相机发送 Reboot 指令...")
-                        dev.reboot()  # 调用底层 C++ 接口强行重启相机主板
-                        logger.critical("Reboot 指令发送成功，相机即将掉线重建。")
-            except Exception as e:
-                logger.error(f"硬件重启指令发送失败: {e}")
-            finally:
-                # 无论指令是否发送成功，彻底清空上位机的内存对象
-                self._clean_resources()
-                self.ctx = None  # 杀掉 Context，逼迫 SDK 下次重新枚举 USB 树
-                self.is_connected = False
-
     # def hardware_reset(self):
-    #
+    #     """
+    #     【核弹级恢复】当遇到 setXu failed 等底层死锁时，强制重启相机主板
+    #     """
     #     with self._lock:
-    #
-    #         logger.critical("hardware reboot start")
-    #
-    #         old_ctx = self.ctx
-    #
-    #         # 先把Python对象全部废掉
-    #         self.pipeline = None
-    #         self.config = None
-    #         self.align_filter = None
-    #
-    #         self.ctx = None
-    #         self.is_connected = False
-    #
-    #         gc.collect()
-    #
+    #         logger.critical(">>> 准备执行相机底层硬件重启 (Hardware Reboot) <<<")
     #         try:
-    #             if old_ctx:
-    #
-    #                 devs = old_ctx.query_devices()
-    #
-    #                 if devs.get_count() > 0:
-    #                     dev = devs.get_device_by_index(0)
-    #
-    #                     logger.critical("send reboot")
-    #
-    #                     dev.reboot()
-    #
-    #                     logger.critical("reboot success")
-    #
-    #         except Exception as e:
-    #             logger.error(e)
-
-    # def hardware_reset(self):
-    #
-    #     with self._lock:
-    #
-    #         logger.critical("hardware reboot start")
-    #
-    #         old_ctx = self.ctx
-    #
-    #         try:
-    #             # 先释放SDK对象
-    #             self._clean_resources()
-    #
-    #             time.sleep(0.5)
-    #
-    #             if old_ctx:
-    #                 devs = old_ctx.query_devices()
-    #
-    #                 if devs.get_count() > 0:
-    #                     dev = devs.get_device_by_index(0)
+    #             if self.ctx is not None:
+    #                 device_list = self.ctx.query_devices()
+    #                 if device_list.get_count() > 0:
+    #                     # 获取物理设备对象
+    #                     dev = device_list.get_device_by_index(0)
     #                     logger.critical("向相机发送 Reboot 指令...")
-    #                     dev.reboot()
+    #                     dev.reboot()  # 调用底层 C++ 接口强行重启相机主板
     #                     logger.critical("Reboot 指令发送成功，相机即将掉线重建。")
     #         except Exception as e:
-    #             logger.error(e)
-    #
+    #             logger.error(f"硬件重启指令发送失败: {e}")
     #         finally:
-    #             self.ctx = None
+    #             # 无论指令是否发送成功，彻底清空上位机的内存对象
+    #             self._clean_resources()
+    #             self.ctx = None  # 杀掉 Context，逼迫 SDK 下次重新枚举 USB 树
     #             self.is_connected = False
+
+    def hardware_reset(self):
+        """网口相机安全复位：不发送 reboot，只做应用层全量 Context 重建"""
+        with self._lock:
+            logger.critical(">>> 相机硬件复位 (全量 Context 重建) <<<")
+
+            try:
+                if self.pipeline is not None:
+                    try:
+                        self.pipeline.stop()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            self._clean_resources()
+            self.ctx = None
+            self.is_connected = False
+
+            time.sleep(3.0)
+
+            self.ctx = Context()
+            logger.critical("新的 Context 已创建，下次 connect() 将强制重新枚举网络设备")
+
+    # def hardware_reset(self):
+    #
+    #     with self._lock:
+    #
+    #         logger.critical(
+    #             ">>> network camera reset <<<"
+    #         )
+    #
+    #         try:
+    #
+    #             #
+    #             # 不再主动 stop
+    #             #
+    #
+    #             self.pipeline = None
+    #             self.config = None
+    #             self.align_filter = None
+    #
+    #             self.ctx = None
+    #
+    #             self.is_connected = False
+    #
+    #             gc.collect()
+    #
+    #         except Exception:
+    #             logger.exception("hardware_reset failed")
+
+    # def hardware_reset(self):
+    #
+    #     with self._lock:
+    #
+    #         logger.critical(
+    #             ">>> network camera reset <<<"
+    #         )
+    #
+    #         try:
+    #
+    #             #
+    #             # 不再主动 stop
+    #             #
+    #
+    #             self.pipeline = None
+    #             self.config = None
+    #             self.align_filter = None
+    #
+    #             self.ctx = None
+    #
+    #             self.is_connected = False
+    #
+    #             gc.collect()
+    #
+    #         except Exception:
+    #             logger.exception("hardware_reset failed")
 
     # 底层直接转化为 Numpy 并销毁 C++ 对象
     def _convert_color_frame(self, color_frame):
@@ -489,6 +510,8 @@ class OrbbecCameraDevice:
                 return False, None, None
 
             try:
+                # 进入取帧前检查是否需要定期冲洗
+                self.flush_if_needed()
                 logger.info(
                     f"wait_for_frames begin pipeline={id(self.pipeline)}"
                 )
@@ -535,6 +558,12 @@ class OrbbecCameraDevice:
                     del frames
 
                     if color_img is not None and depth_img is not None:
+                        # 追踪帧率
+                        now = time.time()
+                        self._frame_time_history.append(now)
+                        # 只保留最近 30 帧
+                        if len(self._frame_time_history) > 30:
+                            self._frame_time_history = self._frame_time_history[-30:]
                         return True, color_img, depth_img
 
                 return False, None, None
@@ -557,11 +586,8 @@ class OrbbecCameraDevice:
             logger.info(f"清理相机底层缓存队列，丢弃前 {num_frames} 帧...")
             for _ in range(num_frames):
                 try:
-                    # 设定极短的超时时间，把积压在内存里的图迅速抽走抛弃
-                    # 在 10fps 下，100ms 的超时极大概率会什么都抽不到！ 必须放宽到 200ms 左右。
-                    # FPS=10 时，每帧需要 100ms 物理生成时间。
-                    # 超时必须大于 100ms，这里设为 200ms 最安全！
-                    frames = self.pipeline.wait_for_frames(200)
+                    # 超时必须大于帧间隔，USB 相机 200ms 足够，网口相机需要 500ms
+                    frames = self.pipeline.wait_for_frames(500)
                     if frames:
                         # 显式释放内存
                         color = frames.get_color_frame()
@@ -596,6 +622,27 @@ class OrbbecCameraDevice:
             except Exception as e:
                 logger.info(f"check_device_exist error: {e}\n {traceback.format_exc()}")
                 return False
+
+    def get_actual_fps(self):
+        if len(self._frame_time_history) < 5:
+            return 0
+        elapsed = self._frame_time_history[-1] - self._frame_time_history[0]
+        if elapsed <= 0:
+            return 0
+        return len(self._frame_time_history) / elapsed
+
+    def is_stream_healthy(self):
+        fps = self.get_actual_fps()
+        if fps == 0:
+            return True
+        return fps >= self._frame_rate_threshold
+
+    def flush_if_needed(self):
+        now = time.time()
+        if now - self._last_deep_flush_time > self._deep_flush_interval:
+            self._last_deep_flush_time = now
+            self.flush_frames(num_frames=30)
+            logger.info(f"定期深冲洗完成 (间隔 {self._deep_flush_interval}s)")
 
     def diagnose_alignment_issue(self):
         """

@@ -40,7 +40,7 @@ class DetectAlgoService:
             raise RuntimeError(f"Algorithm Init Failed: {detector_init_res}")
 
         # 异步存图队列与线程
-        self.save_jpg = 1
+        self.save_jpg = 0
         self.save_queue = queue.Queue(maxsize=100)  # 限制队列长度防止内存溢出
         self.stop_event = threading.Event()
         self.save_thread = threading.Thread(target=self._save_worker, daemon=True)
@@ -78,6 +78,7 @@ class DetectAlgoService:
                 if success:
                     warmed += 1
                     del color_img
+
                     del depth_img
                 else:
                     time.sleep(0.1) # 休眠时间和帧率有关系，计算方法：1/帧率，表示一帧需要的时间
@@ -129,6 +130,11 @@ class DetectAlgoService:
 
                 if not self.device.check_device_exist():
                     logger.warning("camera removed")
+
+                if self.device.is_connected and not self.device.is_stream_healthy():
+                    fps = self.device.get_actual_fps()
+                    logger.warning(f"Camera stream degraded: {fps:.2f}fps < {self.device._frame_rate_threshold}fps, deep flushing...")
+                    self.device.flush_frames(num_frames=50)
 
             except Exception as e:
                 logger.info(f"camera keep alive worker error: {e} \n {traceback.format_exc()}")
@@ -269,51 +275,38 @@ class DetectAlgoService:
                 # time.sleep(0.033)  # 等待约一帧的时间 (30fps的周期)
                 time.sleep(0.1)  # 等待约一帧的时间 (10fps的周期)
 
-                # get_frames失败，原因很多，SDK没在超时时间内拿到新帧/Align失败/MJPG解码失败/Depth Frame为空，都当作失败返回的
-                # 只有当连续多次（例如超过20次）都拿不到图时，才真正去重启相机
+                # get_frames失败，原因很多:
+                #   - RTP UDP 超时/包乱序 (网口相机)
+                #   - Align 失败/MJPG 解码失败/Depth Frame 为空
+                #   - 只有连续大量失败时才真正去重启相机
 
-                # if consecutive_failures == 7:
-
-                # 惩罚级别 1：连续几次拿不到图，说明流卡死了，断开强制重建
-                if recovery_failures == 7:
-                    # logger.warning("Multiple consecutive frame drops, forcing disconnect...")
-                    logger.warning(f">>> 连续 {recovery_failures} 次掉帧，执行 Pipeline 软重启 <<<")
-                    self.device.disconnect()
-                    # self.device.ctx = None
-                    # consecutive_failures = 0 # 重置计数，等待下一轮重连
-                    time.sleep(1.0) # 给 USB 驱动释放句柄的时间
-
+                # 级别 1：轻度掉帧 (5次)，降速 + 深冲洗 RTP 缓存
+                if recovery_failures == 5:
+                    logger.warning(f"连续 {recovery_failures} 次掉帧，执行降速深冲洗...")
+                    self.device.flush_frames(num_frames=30)
+                    time.sleep(2.0)
                     continue
 
+                # 级别 2：持续掉帧 (20次)，Pipeline 重建
+                if recovery_failures == 20:
+                    logger.warning(f">>> 连续 {recovery_failures} 次掉帧，执行 Pipeline 软重启 <<<")
+                    self.device.disconnect()
+                    time.sleep(2.0)
+                    continue
 
-                # if consecutive_failures == 7:
-                # 惩罚级别 2：流卡死极度严重，触发核弹重启
-                elif recovery_failures >= 15:
-                    ###################################################
-                    # 硬件重启
-                    ###################################################
-                    logger.critical(f"检测到{recovery_failures}次连续掉帧或底层死锁，触发硬件重启机制！")
-                    # 调用刚才写的核弹级重启
-                    # self.device.hardware_reset()
+                # 级别 3：极端掉帧 (40次)，硬件复位
+                elif recovery_failures >= 40:
+                    logger.critical(f"连续 {recovery_failures} 次掉帧，触发硬件重启机制！")
                     if hasattr(self.device, 'hardware_reset'):
                         self.device.hardware_reset()
                     else:
                         self.device.disconnect()
 
-                    # 给相机主板重启和 USB 重新枚举留出充足的时间 (非常重要)
-                    logger.info("等待相机主板重启并重新连接 Windows (6秒)...")
+                    logger.info("等待相机主板重启并重新连接 (6秒)...")
                     time.sleep(6.0)
 
-                    # consecutive_failures = 0  # 重置计数，下一轮 for 将自动走 connect()
-
-                    # 重启后，给重连逻辑留出空间
                     recovery_failures = 2
                     continue
-                    ###################################################
-
-                # 判断设备是否掉线，真掉线，和 前面的 if consecutive_failures >= 20 类似
-                # if not self.device.is_alive():
-                #     logger.warning("Camera really lost")
 
                 # 普通失败，进入下一轮重试
                 continue

@@ -356,6 +356,9 @@ class Controller(QThread):
             const.process_num
         )
 
+        if states is None or not states:
+            return
+
         addr_value_map = {
             start_addr + idx: val
             for idx, val in enumerate(states)
@@ -364,9 +367,6 @@ class Controller(QThread):
         if self.loop_count % const.loop_log_rate == 0:
             # logger.info(f"loop states: {states}")
             logger.info(f"loop states (地址:值): {addr_value_map}")
-
-        if not states:
-            return
 
         # 2. 处理映射字典
         handler_map = {
