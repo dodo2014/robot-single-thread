@@ -217,6 +217,7 @@ class OrbbecCameraDevice:
                     self.ctx = Context()
 
                 # 检查是否有设备
+                self.ctx.enable_net_device_enumeration(True)
                 device_list = self.ctx.query_devices()
                 if device_list.get_count() == 0:
                     # self.is_connected = False
@@ -571,6 +572,7 @@ class OrbbecCameraDevice:
                 except Exception as e:
                     logger.info(f"flush frames error: {e}\n {traceback.format_exc()}")
                     pass
+            logger.info(f"flush frames end")
 
     def is_alive(self):
         """简单的链路健康检查"""
