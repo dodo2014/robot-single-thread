@@ -27,6 +27,7 @@ class PType:
     UNLOAD_CHECK = 3
     IRON_CHIP_CHECK = 4
     FEED_END_CHECK = 5
+    GRIPPER_STATE_CHECK = 6
 
 class DetectStatus:
     UNKNOWN = 0
@@ -153,6 +154,18 @@ class RGBDDetector:
         self.unload_depth_min = 100         # 物料存在的最小深度
         self.unload_depth_max = 500         # 物料存在的最大深度
         
+        # ===================== 
+        #夹爪状态检测
+        self.gripper_roi_x = 386
+        self.gripper_roi_y = 190
+        self.gripper_roi_w = 40
+        self.gripper_roi_h = 20
+        self.gripper_depth_min = 400
+        self.gripper_depth_max = 500
+        self.gripper_state_threshold = 450
+        self.gripper_gray_threshold = 128
+        self.gripper_min_valid_points = 100
+
         # =====================   
         random.seed(10)
         # 保存分割后的区域结果，用于绘图接口调用
@@ -381,6 +394,17 @@ class RGBDDetector:
             self.unload_layer_count = cfg.get("unload_layer_count", 6)
             self.unload_depth_threshold = cfg.get("unload_depth_threshold", 15)
             self.unload_sort_rule = cfg.get("unload_sort_rule", 1)
+
+            #夹爪状态检测
+            self.gripper_roi_x = cfg.get("gripper_roi_x", 386)
+            self.gripper_roi_y = cfg.get("gripper_roi_y", 190)
+            self.gripper_roi_w = cfg.get("gripper_roi_w", 40)
+            self.gripper_roi_h = cfg.get("gripper_roi_h", 20)
+            self.gripper_depth_min = cfg.get("gripper_depth_min", 400)
+            self.gripper_depth_max = cfg.get("gripper_depth_max", 500)
+            self.gripper_state_threshold = cfg.get("gripper_state_threshold", 450)
+            self.gripper_gray_threshold = cfg.get("gripper_gray_threshold", 128)
+            self.gripper_min_valid_points = cfg.get("gripper_min_valid_points", 100)
 
             # ===================== 
             self.config_loaded = True
@@ -3206,6 +3230,65 @@ class RGBDDetector:
         
         return exists_flag, coords, target_layer, target_position
 
+    def _gripper_state_check(self, depth_img, rgb_img):
+        """
+        深度优先，灰度备用：判断夹爪闭合/松开状态
+        返回 (status, coords)
+            status: 1=闭合, 2=松开, 0=未知
+            coords: [x, y, z, r] (ROI 中心世界坐标)
+        """
+        h, w, _ = rgb_img.shape
+        x = max(self.gripper_roi_x, 0)
+        y = max(self.gripper_roi_y, 0)
+        roi_w = min(self.gripper_roi_w, w - x)
+        roi_h = min(self.gripper_roi_h, h - y)
+        if roi_w <= 0 or roi_h <= 0:
+            return 0, [0.0, 0.0, 0.0, 0.0]
+
+        # ---------- 1. 尝试深度判断 ----------
+        # if depth_img is not None:
+        #     roi_depth = depth_img[y:y+roi_h, x:x+roi_w]
+        #     # 预处理
+        #     roi_depth = cv2.medianBlur(roi_depth, self.median_blur_kernel)
+        #     roi_depth = cv2.GaussianBlur(roi_depth, (3,3), self.gaussian_sigma)
+
+        #     mask = (roi_depth != self.depth_invalid) & \
+        #         (roi_depth >= self.gripper_depth_min) & \
+        #         (roi_depth <= self.gripper_depth_max)
+        #     valid_depth = roi_depth[mask]
+        #     min_points = getattr(self, 'gripper_min_valid_points', 10)
+
+        #     if len(valid_depth) >= min_points:
+        #         avg_depth = np.mean(valid_depth)
+        #         status = 1 if avg_depth < self.gripper_state_threshold else 2
+        #         center_pixel = (x + roi_w//2, y + roi_h//2)
+        #         world_xyz = self._pixel2world(center_pixel, avg_depth)
+        #         coords = [world_xyz[0], world_xyz[1], world_xyz[2], 0.0]
+        #         return status, coords
+
+        # ---------- 2. 深度不足，尝试灰度 ----------
+        if rgb_img is None:
+            return 0, [0.0, 0.0, 0.0, 0.0]
+
+        gray = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2GRAY)
+        roi_gray = gray[y:y+roi_h, x:x+roi_w]
+        # 可加高斯模糊（可选）
+        # roi_gray = cv2.GaussianBlur(roi_gray, (3,3), 0)
+        mean_gray = np.mean(roi_gray)
+        gray_thresh = getattr(self, 'gripper_gray_threshold', 128)
+        status = 1 if mean_gray < gray_thresh else 2   # 假设闭合区域灰度低
+
+        # 坐标仍用深度图中心，若深度不可用则取 0
+        center_pixel = (x + roi_w//2, y + roi_h//2)
+        # 从深度图中取中心附近有效深度作为参考（可能为0）
+        center_z = 0 # depth_img[center_pixel[1], center_pixel[0]] if 0 <= center_pixel[1] < h and 0 <= center_pixel[0] < w else 0
+        if center_z == self.depth_invalid:
+            center_z = 0.0
+        world_xyz = self._pixel2world(center_pixel, center_z)
+        coords = [world_xyz[0], world_xyz[1], world_xyz[2], 0.0]
+
+        return status, coords
+
     # ===================== 【对外接口2 - 检测接口】核心 =====================
     def detect(self, ptype, rgb_img, depth_img):
         try:
@@ -3213,7 +3296,7 @@ class RGBDDetector:
                 return {"code":-1, "err_msg":"请先调用初始化函数加载配置"}
             if depth_img is None or depth_img.dtype != np.uint16:
                 return {"code":-2, "err_msg":"深度图格式错误，必须是CV_16UC1单通道格式"}
-            if ptype < PType.MATERIAL_CHECK or ptype > PType.FEED_END_CHECK:
+            if ptype < PType.MATERIAL_CHECK or ptype > PType.GRIPPER_STATE_CHECK:
                 return {"code":-3, "err_msg":"ptype类型错误，仅支持1/2/3/4/5"}
             
             coords = [0.0, 0.0, 0.0, 0.0]
@@ -3290,7 +3373,20 @@ class RGBDDetector:
                     "result": result_data,
                     "err_msg": ""
                 }
-
+            elif ptype == PType.GRIPPER_STATE_CHECK:
+                status, coords = self._gripper_state_check(depth_img, rgb_img)
+                exists_flag = 1 if status != 0 else 0   # 1表示检测成功，0表示失败
+                # 将状态存入结果
+                return {
+                    "code": 0,
+                    "result": {
+                        "ptype": ptype,
+                        "coords": coords,
+                        "exists": exists_flag,
+                        "state": status   # 1闭合，2松开，0未知
+                    },
+                    "err_msg": ""
+                }
             return {
                 "code":0,
                 "result":{
@@ -3370,7 +3466,7 @@ class RGBDDetector:
         cv2.putText(draw_img, f"STATUS: {status_text}", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
         
         # 检测类型
-        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron", 5: "End" }
+        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron", 5: "End", 6: "Gripper" }
         cv2.putText(draw_img, f"TYPE: {type_dict[ptype]}", (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
         
         # 绘制坐标信息
@@ -3441,7 +3537,7 @@ class RGBDDetector:
         cv2.putText(draw_img, f"STATUS: {status_text}", (20,30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
         
         # 检测类型
-        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron", 5: "End"}
+        type_dict = {1: "Material", 2: "Feed", 3: "Unload", 4: "Iron", 5: "End", 6: "Gripper"}
         cv2.putText(draw_img, f"TYPE: {type_dict[ptype]}", (20,70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
         
         # 绘制坐标信息
@@ -3646,6 +3742,19 @@ class RGBDDetector:
                 cv2.putText(draw_img, f"Chip {conf}", (x1, y1-5), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 2)
 
+        if ptype == PType.GRIPPER_STATE_CHECK:
+            state = res.get("state", 0)
+            state_text = "CLOSE" if state == 1 else "OPEN" if state == 2 else "UNKNOWN"
+            state_color = (0,255,0) if state == 1 else (0,0,255) if state == 2 else (255,255,0)
+            cv2.putText(draw_img, f"GRIPPER: {state_text}", (20, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, state_color, 2)
+            # 绘制ROI框
+            cv2.rectangle(draw_img, (self.gripper_roi_x, self.gripper_roi_y),
+                        (self.gripper_roi_x+self.gripper_roi_w, self.gripper_roi_y+self.gripper_roi_h),
+                        (255,0,255), 2)
+            cv2.putText(draw_img, "Gripper ROI", (self.gripper_roi_x+5, self.gripper_roi_y+20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,255), 2)
+
         # 6. 绘制图例
         legend_y = draw_img.shape[0] - 80
         cv2.putText(draw_img, "Legend:", (20, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
@@ -3723,10 +3832,11 @@ if __name__ == "__main__":
 
     # 获取所有PNG文件
 
-    date_folder = "20260514"
+    date_folder = "gripper"
     image_folder = "data/" + date_folder
 
     camera_img_folder = Path(__file__).parent.parent.parent / "camera_img" / date_folder
+    print(camera_img_folder)
 
     image_files = list(camera_img_folder.glob("*.png"))
     print(image_files)
@@ -3777,7 +3887,8 @@ if __name__ == "__main__":
         # ptype = PType.MATERIAL_CHECK
         # ptype = PType.FEED_CHECK
         # ptype = PType.FEED_END_CHECK
-        ptype = PType.UNLOAD_CHECK
+        # ptype = PType.UNLOAD_CHECK
+        ptype = PType.GRIPPER_STATE_CHECK
         detect_res = detector.detect(ptype, rgb_img, depth_img)
         print("检测结果:\n", json.dumps(detect_res, ensure_ascii=False, indent=2))
 

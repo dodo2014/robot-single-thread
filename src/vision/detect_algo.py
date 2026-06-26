@@ -49,6 +49,8 @@ class DetectAlgoService:
         self.alive_thread = threading.Thread(target=self._keep_alive_worker, daemon=True)
         self.alive_thread.start()
 
+        self._keepalive_fail_count = 0
+
         self.init_connect()
 
     def init_connect(self):
@@ -131,16 +133,20 @@ class DetectAlgoService:
                 if not self.device.check_device_exist():
                     logger.warning("camera removed")
 
-                if self.device.is_connected and not self.device.is_stream_healthy():
-                    fps = self.device.get_actual_fps()
-                    logger.warning(f"Camera stream degraded: {fps:.2f}fps < {self.device._frame_rate_threshold}fps, deep flushing...")
-                    self.device.flush_frames(num_frames=50)
+                if self.device.is_connected and not self.device.check_stream_responsive(timeout_ms=800):
+                    self._keepalive_fail_count += 1
+                    if self._keepalive_fail_count >= 3:
+                        logger.warning("Keep alive: 3 次连续取帧超时，相机 RTP 流可能中断，深冲洗...")
+                        self.device.flush_frames(num_frames=10)
+                        self._keepalive_fail_count = 0
+                else:
+                    self._keepalive_fail_count = 0
 
             except Exception as e:
                 logger.info(f"camera keep alive worker error: {e} \n {traceback.format_exc()}")
                 pass
 
-            time.sleep(15)
+            time.sleep(30)
 
 
     def _save_worker(self):
@@ -539,6 +545,8 @@ def main():
         response = service.execute_detection_midian_depth(ptype=const.photo_type_find_head)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_normal)
         # response = service.execute_detection_midian_depth(ptype=const.photo_type_aluminum)
+        # response = service.execute_detection_midian_depth(ptype=const.photo_type_cylinder)
+
         logger.info(f"response : {response}")
         print(response)
 

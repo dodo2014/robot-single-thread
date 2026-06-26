@@ -37,7 +37,7 @@
 	// ==================== 端面水平线检测配置（相机翻转90度） ====================
 	"end_roi_x": 200,
 	"end_roi_y": 300,
-	"end_roi_w": 1000, 
+	"end_roi_w": 1020,
 	"end_roi_h": 500,
 
 	//"end_depth_start": 420, //产品端面的拍摄高度
@@ -113,7 +113,7 @@
 	"unload_roi_h": 550,               // 下料区域ROI高度（像素）
 	
 	// ==================== 下料算法参数（单位：mm）====================
-	"unload_tray_depth": 1360,      	// 托盘初始高度（mm），底层产品的基准深度
+	"unload_tray_depth": 1337,      	// 托盘初始高度（mm），底层产品的基准深度
 	"unload_start_x": 50.0,         	// 下料区域第一个产品左上角X坐标（mm）
 	"unload_start_y": -450.0,       	// 下料区域第一个产品左上角Y坐标（mm）
 	"unload_item_width": 123.0,      	// 产品宽度（mm）//x方向
@@ -123,5 +123,16 @@
 	"unload_item_count_per_layer": 5,  	// 每层可放置的产品数量
 	"unload_layer_count": 6,           	// 下料区域总层数
 	//"unload_depth_threshold": 15.0,    	// 深度差异阈值（mm），用于判断该位置是否有物料
-	"unload_sort_rule": 1             	// 下料排序规则：0=Y降序(从下到上)，1=Y升序(从上到下)
+	"unload_sort_rule": 1,             	// 下料排序规则：0=Y降序(从下到上)，1=Y升序(从上到下)
+	
+	// ==================== 夹爪状态检测（深度 + 灰度双模式） ====================
+	"gripper_roi_x": 793,
+	"gripper_roi_y": 394,
+	"gripper_roi_w": 63,
+	"gripper_roi_h": 45,
+	"gripper_depth_min": 400,
+	"gripper_depth_max": 500,
+	"gripper_state_threshold": 450.0,   // 深度阈值 (mm)
+	"gripper_gray_threshold": 128,      // 灰度阈值 (0-255)，备用
+	"gripper_min_valid_points": 1000000      // 有效深度点数阈值
 }

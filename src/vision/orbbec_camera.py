@@ -10,7 +10,7 @@ from pyorbbecsdk import (AlignFilter, Pipeline, Config, Context, OBError,
 from src.utils import logger
 
 class OrbbecCameraDevice:
-    def __init__(self, width=1280, height=800, fps=10):
+    def __init__(self, width=1280, height=800, fps=15):
         # 不再使用 set_device_changed_callback，坚决不用底层 C++ 回调，极易引发崩溃
         
         self.ctx = Context()
@@ -636,6 +636,23 @@ class OrbbecCameraDevice:
         if fps == 0:
             return True
         return fps >= self._frame_rate_threshold
+
+    def check_stream_responsive(self, timeout_ms=800):
+        """用短超时拉一帧，判断相机 RTP 流是否真正活跃（不受应用停顿影响）"""
+        with self._lock:
+            if not self.pipeline or not self.is_connected:
+                return False
+            try:
+                frames = self.pipeline.wait_for_frames(timeout_ms)
+                if frames:
+                    color = frames.get_color_frame()
+                    if color:
+                        del color
+                    del frames
+                    return True
+                return False
+            except Exception:
+                return False
 
     def flush_if_needed(self):
         now = time.time()

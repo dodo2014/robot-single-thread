@@ -35,7 +35,7 @@ def process_action(action_name: str):
             plc_addr = self.plc.map_modbus_address(process_addr)
             # 3. 统一日志打印
             logger.info(
-                f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: {action_name}"
+                f"\n动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: {action_name}"
             )
             # 4. 执行原业务函数
             return func(self, process_addr, value)
@@ -174,7 +174,7 @@ class Controller(QThread):
         self._start_motor_poller() # 启动独立电机状态轮询线程
 
         while self.running:
-            # algo_response = self.vision_service.execute_detection_midian_depth(const.photo_type_find_head)
+            # algo_response = self.vision_service.execute_detection_midian_depth(const.photo_type_loading)
             # logger.info(f"algo_response >>>>>>>> : {algo_response}")
 
             try:
@@ -860,6 +860,45 @@ class Controller(QThread):
     def take_photo_check(self):
         return "OK"
 
+    def decode_algo_result(self, result : dict, ptype: int):
+        exists = result.get("exists")
+        res = "error"
+
+        if ptype == const.photo_type_normal:  # 1/有料，报ok
+            if exists == 1:
+                res = "ok"
+            else:
+                res = "empty"
+        elif ptype == const.photo_type_loading:  # 1/有料，报ok; 2/无料, 报ng
+            if exists == 1:
+                res = "ok"
+            else:
+                res = "empty"
+        elif ptype == const.photo_type_find_head:
+            if exists == 1:
+                res = "ok"
+            else:
+                res = "empty"
+        elif ptype == const.photo_type_unloading:  # 1
+            if result.get("coords", []):
+                res = "ok"
+            else:
+                res = "empty"
+        elif ptype == const.photo_type_aluminum:  # 1/有铝屑，报ng; 2/没铝屑，正常，报ok
+            if exists == 1:  # 有铝屑，真报错
+                res = "error"
+            elif exists == 2:  # 没有铝屑，返回OK
+                res = "ok"
+        elif ptype == const.photo_type_cylinder:  #
+            state = result.get("state")
+            if exists == 1 and state == 2: # 1/松开状态，2/夹紧状态
+                res = "ok"
+            else:
+                res = "error"
+
+        return res
+
+
     def take_photo_position(self, point_coords, config, loading=None, ptype=const.photo_type_normal):
         """
         :param point_coords:传给相机的拍照位置坐标
@@ -906,37 +945,10 @@ class Controller(QThread):
                     detected_coords = [detected_coords]
 
                 trigger_type = "retrieve"  # 默认抓取
-                res = "error"
-                exists = result.get("exists")
 
                 layer = result.get("layer")
                 position = result.get("position")
-
-                if ptype == const.photo_type_normal:  # 1/有料，报ok
-                    if exists == 1:
-                        res = "ok"
-                    else:
-                        res = "empty"
-                elif ptype == const.photo_type_loading:  # 1/有料，报ok; 2/无料, 报ng
-                    if exists == 1:
-                        res = "ok"
-                    else:
-                        res = "empty"
-                elif ptype == const.photo_type_find_head:
-                    if exists == 1:
-                        res = "ok"
-                    else:
-                        res = "empty"
-                elif ptype == const.photo_type_unloading:  # 1
-                    if result.get("coords", []):
-                        res = "ok"
-                    else:
-                        res = "empty"
-                elif ptype == const.photo_type_aluminum:  # 1/有铝屑，报ng; 2/没铝屑，正常，报ok
-                    if exists == 1:  # 有铝屑，真报错
-                        res = "error"
-                    elif exists == 2:  # 没有铝屑，返回OK
-                        res = "ok"
+                res = self.decode_algo_result(result, ptype)
 
                 return {
                     "res": res,
@@ -1675,17 +1687,25 @@ class Controller(QThread):
                     if photo_trigger == const.photo_trigger_depth:
                         has_depth_vision_triggered = True
 
-                        # 调用视觉逻辑
-                        vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
-                        if vision_res == "OK":
+                        ###########################################
+                        # 测试代码，工装气缸夹爪测试，算法未完善，跳过
+                        ###########################################
+                        if photo_type == const.photo_type_cylinder:
+                            # vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, const.photo_type_cylinder)
                             vision_ok = True
                         else:
-                            # EMPTY 或者 ERROR
-                            vision_ok = False
 
-                            # 判断是否是铝屑识别，有铝屑
-                            if photo_type == const.photo_type_aluminum:
-                                aluminum_exists = True
+                            # 调用视觉逻辑
+                            vision_res = self.handle_vision_recursive_v1(process_addr, end_point, loading, photo_type)
+                            if vision_res == "OK":
+                                vision_ok = True
+                            else:
+                                # EMPTY 或者 ERROR
+                                vision_ok = False
+
+                                # 判断是否是铝屑识别，有铝屑
+                                if photo_type == const.photo_type_aluminum:
+                                    aluminum_exists = True
 
                     elif photo_trigger == const.photo_trigger_ccd:
                         # CCD 相机触发逻辑
@@ -2832,8 +2852,8 @@ class Controller(QThread):
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
 
-    # 首次臂去下料位拍照
-    @process_action("首次臂去下料位拍照")
+    # 工装气缸夹具拍照
+    @process_action("工装气缸夹具拍照")
     def handle_process_0x40084(self, process_addr, value):
         # if value != 10:
         #     return
@@ -2842,8 +2862,8 @@ class Controller(QThread):
         # logger.info(f"动作{hex(process_addr)} - {plc_addr} 收到请求 {value}，开始执行流程: 首次臂去下料位拍照")
 
         # 1. 起始点定义为上一个动作的结束点, 固定上一个动作的plc地址位，暂时不使用全局self.last_motion_end_point
-        last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40083/262275
-        last_process_points = self.cfg_manager.get_process_config(hex(last_process_addr).upper()).get("points")
+        # last_process_addr = const.last_process_addr_map.get(process_addr)  # 0x40083/262275
+        # last_process_points = self.cfg_manager.get_process_config(hex(last_process_addr).upper()).get("points")
         # 取最后一个点的坐标，作为当前流程的
         # process_start_point = last_process_points[-1]
         process_start_point = self.get_realtime_point()
@@ -2860,7 +2880,7 @@ class Controller(QThread):
         logger.info(f"point list: {points}")
 
         # 执行运动控制
-        self.execute_standard_motion_sequence(process_addr, points, vision_retry=True)
+        self.execute_standard_motion_sequence(process_addr, points, photo_type=const.photo_type_cylinder, vision_retry=True)
 
         # 动作全部成功完成后，更新全局记录
         # 将当前动作的最后一个点，标记为下一次动作的起点
@@ -3832,9 +3852,9 @@ class Controller(QThread):
         # ==========================================
         # 5: 周期结束，主动执行相机预防性重启
         # ==========================================
-        if self.vision_service:
-            # 直接调用专用的硬件重启接口，不影响后台线程
-            self.vision_service.reboot_camera()
+        # if self.vision_service:
+        #     # 直接调用专用的硬件重启接口，不影响后台线程
+        #     self.vision_service.reboot_camera()
 
     # 逻辑判断，10：请求判断  11：物料未加工完成,还有剩余物料  12：加工结束，所有的物料都加工结束；13：取垫木；14：取垫木结束
     def handle_process_0x40094(self, process_addr, value):
