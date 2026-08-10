@@ -141,6 +141,13 @@ PHOTO_TYPE_DESC = {
     photo_type_cylinder: "cylinder",
 }
 
+# KPI 生产统计相关参数
+kpi_file_name = "kpi.json"  # 产量/节拍统计文件名 (存放在项目根目录, 与 loading_index.json 同级)
+machine_process_time_s = 120  # 机床关门加工时间(秒)。节拍 = 两次放料完成时间差 - 机床加工时间, 机床加工不属于机械臂上下料内容
+cycle_sample_max_s = 130  # 单件节拍样本的合理上限(秒)。超过则判定为含"暂停/人工干预"的异常样本, 不参与节拍平均
+cycle_window_size = 5  # 节拍滑动平均窗口大小, 取最近 N 个有效样本的平均值作为当前节拍显示
+kpi_history_days = 30  # kpi.json 中历史数据保留天数, 超过该天数的历史日期会被自动清理 (默认保留近一个月)
+
 # 上料区域索引文件名
 loading_index_file_name = "loading_index.json"
 # 上料区阵列索引的key

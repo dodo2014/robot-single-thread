@@ -868,6 +868,13 @@ class MainHMI(QMainWindow):
         if hasattr(self.controller, 'sig_camera_frame'):
             self.controller.sig_camera_frame.connect(self._on_camera_frame)
 
+        # 生产 KPI 信号 (今日产量 / 当前节拍, 每次放料成功 +1 时由 Controller 发射)
+        if hasattr(self.controller, 'sig_kpi'):
+            self.controller.sig_kpi.connect(self._on_kpi)
+            # 启动时立即用持久化的历史数据刷新, 避免重启后要等下一次放料才显示产量
+            count, cycle_time = self.controller.kpi_counter.get_snapshot()
+            self._apply_kpi(count, cycle_time)
+
     def _on_camera_frame(self, color_img, result_img):
         """
         接收 Controller 传来的相机帧，更新左侧图像显示。
@@ -887,6 +894,19 @@ class MainHMI(QMainWindow):
             self._set_pixmap_from_ndarray(self.rgb_image, color_img, is_bgr=False)
         if result_img is not None:
             self._set_pixmap_from_ndarray(self.depth_image, result_img, is_bgr=True)
+
+    def _on_kpi(self, count, cycle_time):
+        """接收 Controller 的产量/节拍信号, 更新 KPI 卡片 (主线程执行)"""
+        self._apply_kpi(count, cycle_time)
+
+    def _apply_kpi(self, count, cycle_time):
+        """刷新 KPI 卡片数值: 今日产量(千分位) 与 当前节拍"""
+        self.kpi_output_value.setText(f"{count:,}")
+        if cycle_time is not None and cycle_time > 0:
+            self.kpi_cycle_value.setText(f"{cycle_time:.1f}s")
+        else:
+            # 首件或暂无有效样本时, 节拍显示占位符
+            self.kpi_cycle_value.setText("--")
 
     @staticmethod
     def _set_pixmap_from_ndarray(label: ClickableLabel, ndata, is_bgr: bool = False):

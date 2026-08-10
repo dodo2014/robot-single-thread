@@ -2,6 +2,7 @@ from src.utils.logger import logger
 from src.plc.plc_client import PLCClient
 from src.utils.config_manager import ConfigManager, CONFIG_FILE, VISION_DATA_FILE
 from src.utils.loading_index import LoadingIndex
+from src.utils.kpi_counter import ProductionCounter
 from src.utils.udp_client import UdpClient
 from src.core.kinematics import ScaraKinematics
 from src.core.trajectory import TrajectoryV2
@@ -66,6 +67,9 @@ class Controller(QThread):
     sig_unloading_wood_stick_clear = pyqtSignal()
     # HMI 相机画面信号 (color_img, result_img) — 从视觉线程发往主界面
     sig_camera_frame = pyqtSignal(object, object)
+    # HMI 生产 KPI 信号 (today_count, cycle_time) — 每次放料成功 +1 时发射
+    #   today_count: 今日累计产量; cycle_time: 当前节拍(秒), 无样本时为 0.0 (界面显示 "--")
+    sig_kpi = pyqtSignal(int, float)
 
     def __init__(self):
         super().__init__()
@@ -105,6 +109,9 @@ class Controller(QThread):
         self.current_action_msg = None
         self.current_process_step = 0
         self.current_process_msg = const.process_step_mapping[self.current_process_step]
+
+        # 生产 KPI 统计 (今日产量 / 当前节拍), 数据持久化到 kpi.json
+        self.kpi_counter = ProductionCounter()
 
     def load_config(self):
         try:
@@ -3819,7 +3826,16 @@ class Controller(QThread):
         points.append(final_unload_target)
 
         # 执行运动
-        self.execute_standard_motion_sequence(process_addr, points)
+        motion_ok = self.execute_standard_motion_sequence(process_addr, points)
+
+        # 放料动作成功完成 = 一件产品下线, 才计入当日产量并刷新节拍
+        # (execute_standard_motion_sequence 在急停/移动失败/视觉NG时会返回 False, 此时不计产量)
+        if motion_ok:
+            count, cycle_time = self.kpi_counter.record_one()
+            self.sig_kpi.emit(count, cycle_time)
+            logger.info(f"[KPI] 放料完成，今日产量={count}，当前节拍={cycle_time:.1f}s")
+        else:
+            logger.warning("放料运动未成功完成，本次不计入产量")
 
         self.last_motion_end_point = points[-1]
         logger.info(f"动作完成，更新当前位置记录为: {process_addr} : {self.last_motion_end_point['name']}")
