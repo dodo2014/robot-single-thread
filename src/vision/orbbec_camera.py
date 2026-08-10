@@ -64,8 +64,6 @@ class OrbbecCameraDevice:
             if self.align_filter is None:
                 self.align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
 
-
-
             # 1. 获取彩色传感器(COLOR_SENSOR)的配置列表
             color_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
             if not color_profiles:

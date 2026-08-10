@@ -28,6 +28,9 @@ class DetectAlgoService:
         self.device = OrbbecCameraDevice()
         self.max_retries = 10
         self.depth_show = 1
+        # 最新帧缓存 (供 HMI 界面读取)
+        self._last_color_img = None   # numpy.ndarray (H, W, 3) RGB
+        self._last_result_img = None  # numpy.ndarray 检测结果叠加图
         # 初始化 C++ 算法
         # self.algo = cpp_algo.MaterialAlgorithm()
         # init_res = self.algo.initialize(self.product_no)
@@ -181,18 +184,18 @@ class DetectAlgoService:
                 # print(f"Error in save worker: {e}")
                 logger.error(f"Error in save worker: {e}")
 
-    def _save_to_local(self, color_arr, depth_arr):
-        """保存图像到本地"""
-        timestamp = int(time.time() * 1000)
-        path = os.path.join(self.save_dir, time.strftime("%Y%m%d"))
-        os.makedirs(path, exist_ok=True)
-
-        # RGB -> BGR for OpenCV
-        bgr_img = cv2.cvtColor(color_arr, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(f"{path}/rgb_{timestamp}.jpg", bgr_img)
-        # 深度图保存为16位PNG
-        cv2.imwrite(f"{path}/depth_{timestamp}.png", depth_arr)
-        return f"{path}/rgb_{timestamp}.jpg"
+    # def _save_to_local(self, color_arr, depth_arr):
+    #     """保存图像到本地"""
+    #     timestamp = int(time.time() * 1000)
+    #     path = os.path.join(self.save_dir, time.strftime("%Y%m%d"))
+    #     os.makedirs(path, exist_ok=True)
+    #
+    #     # RGB -> BGR for OpenCV
+    #     bgr_img = cv2.cvtColor(color_arr, cv2.COLOR_RGB2BGR)
+    #     cv2.imwrite(f"{path}/rgb_{timestamp}.jpg", bgr_img)
+    #     # 深度图保存为16位PNG
+    #     cv2.imwrite(f"{path}/depth_{timestamp}.png", depth_arr)
+    #     return f"{path}/rgb_{timestamp}.jpg"
 
     def execute_detection(self, ptype: int, detect: int=0, save_img: bool=True):
         """
@@ -352,6 +355,10 @@ class DetectAlgoService:
                     result_img = self.detector.draw_result_with_rotated_box(depth_color, result)
                     # cv2.imshow("result-line", result_img)
 
+                    # 缓存最新帧，供 HMI 界面读取
+                    self._last_color_img = color_img.copy()
+                    self._last_result_img = result_img.copy()
+
                     if self.save_jpg:
                     # if save_img:
                         cv2.imwrite(f"{path}/detect_result_horizontal_line_{timestamp}.jpg", result_img)
@@ -372,7 +379,7 @@ class DetectAlgoService:
         logger.info(f"Processing error: Max retries reached. {last_err}")
         return {"code": -1, "err_msg": f"Max retries reached. Last error: {last_err}"}
 
-    def execute_detection_midian_depth(self, ptype:int, number:int=21, check_estop_func=None):
+    def execute_detection_midian_depth(self, ptype:int, number:int=14, check_estop_func=None):
         """获取深度值的中位数返回值"""
 
         # 1. 执行一次带有重连保护的空调用，确保链路是通的，并顺便预热
@@ -391,15 +398,15 @@ class DetectAlgoService:
 
         # 2. 预热排空 (非常重要，代替你之前的 if idx < 7: detect=0)
         # 直接让底层快速抽掉 7 帧，不经过任何上层封装，耗时仅需 0.2 秒！
-        filter_number = 7
-        self.device.flush_frames(num_frames=filter_number)
+        # filter_number = 9
+        self.device.flush_frames(num_frames=const.disgard_frames_number)
 
-        required_count = number - filter_number
+        # required_count = number - filter_number
         consecutive_failures = 0
 
         results = []
 
-        while len(results) < required_count:
+        while len(results) < const.available_frames_number:
             if check_estop_func and check_estop_func():
                 return {"code":-99, "err_msg":f"检测异常: 系统急停"}
 

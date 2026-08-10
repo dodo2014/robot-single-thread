@@ -97,10 +97,30 @@ last_process_addr_map = {
     0x40090: 0x4008F,
 
     0x40092: 0x40090,
-    0x40096: 0x40093,
-    0x40097: 0x40096,
-    0x40099: 0x40098,
-    0x4009C: 0x4008F,
+    # 0x40096: 0x40093,
+    # 0x40097: 0x40096,
+    # 0x40099: 0x40098,
+    # 0x4009C: 0x4008F,
+}
+
+# 视觉检测丢弃帧数
+disgard_frames_number = 9
+# 视觉检测有效帧数
+available_frames_number = 5
+
+# 工艺进度
+process_step_remove_debris = 0  # 工装除屑
+process_step_loading = 1  # 上料
+process_step_blanking = 2  # 下料
+process_step_detection = 3  # 检测
+process_step_palletizing = 4  # 码垛
+
+process_step_mapping = {
+    process_step_remove_debris: "工装除屑",
+    process_step_loading: "上料",
+    process_step_blanking: "下料",
+    process_step_detection: "检测",
+    process_step_palletizing: "码垛",
 }
 
 # 拍照触发的动作类型，普通拍照(物料识别)/1，上料(空料判断)/2，下料(满料判断)/3，铝屑识别/4
@@ -144,17 +164,17 @@ product_y_offset = 995.0  # 上料区域，端头到抓料点的偏移，即物�
 depth_interference_x_offset = 20  # 上料区域，精拍点位，为了消除精拍之后的深度干扰，在精拍点位X+方向，增加偏移(mm)
 fine_photo_world_angle = -0.23  # 上料区域精拍点位的末端绝对角度 (度°)
 
-loading_forward_distance = 36 # 夹爪前移距离(mm)，用于包住物料
+loading_forward_distance = 36  # 夹爪前移距离(mm)，用于包住物料
 
 # 抓料，系统漂移+透视视差补偿
 loading_x_back = -489.39  # 后方参考 X 坐标；后方(X-方向，靠近基座)的料，Y值理想情况下的X坐标值
 loading_x_front = 137.62  # 前方参考 X 坐标；
 loading_x_comp_back = 0.0  # 假设：后方料正好(能包住)，前方料因为下垂/视角放大，需要补偿 +20mm 才能包住
 loading_x_comp_front = 25  # 前方的料，需要前移x(mm)，才能包住物料
-loading_y_comp_back = 0.0 # 后方Y刚好对准(0误差)，前方Y+少了20mm(需要+20补偿)
-loading_y_comp_front = 10.0 # 前方少，需要加回去，+20; 前方多出了20mm，需要减去20mm拉回来，取值-20
-loading_r_comp_back = 0.0 # 假设后方的料，r角正好对齐物料, 0°表示对齐
-loading_r_comp_front = 1.14 # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
+loading_y_comp_back = 0.0  # 后方Y刚好对准(0误差)，前方Y+少了20mm(需要+20补偿)
+loading_y_comp_front = 10.0  # 前方少，需要加回去，+20; 前方多出了20mm，需要减去20mm拉回来，取值-20
+loading_r_comp_back = 0.0  # 假设后方的料，r角正好对齐物料, 0°表示对齐
+loading_r_comp_front = 1.14  # 假设后方的料，r角有偏差，加上之后才于物料对齐，单位度°
 
 # 上料安全高度Z值
 loading_safe_z = 436.86
@@ -163,8 +183,8 @@ loading_safe_z = 436.86
 unloading_safe_z = 219.25  # 下料安全高度
 # unloding_x_list = [-442, -293, -144, -5, 154] # 5个料位的绝对X坐标, 坐标差值149-150
 # unloding_x_list = [-307, -157, -7, 143, 293] # 5个料位的绝对X坐标, 坐标差值149-150
-unloding_x_list = [-287, -142, 3, 148, 293] # 5个料位的绝对X坐标, 坐标差值149-150
-unloding_y = -1297    #  固定的Y坐标
+unloding_x_list = [-287, -142, 3, 148, 293]  # 5个料位的绝对X坐标, 坐标差值149-150
+unloding_y = -1297  # 固定的Y坐标
 unloading_layer_0_z = -700  # 第0层的放料高度Z值
 unloading_layer_gap = product_height + interval_height  # 产品高度 + 垫木高度
 # fine_unloading_world_angle = -3.9  # 放料末端绝对角度°
@@ -196,6 +216,7 @@ product_unloading_rack_reset = 11  # 满料/放垫木 复位信号，plc发出
 product_unloading_rack_reset_ack = 12  # 上位机复位完成，上位机回复plc
 
 # 尺寸检测udp配置
-inspection_udp_ip = '192.168.0.5'
+# inspection_udp_ip = '192.168.0.5'
+inspection_udp_ip = '192.168.0.3'
 inspection_udp_port = 8501
 inspection_udp_local_port = 8500

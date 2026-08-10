@@ -10,7 +10,7 @@ from src.core.kinematics import ScaraKinematics
 def compute_gripper_target(
         camera_data,  # [xc, yc, zc, rc] 来自 VisionSystem
         robot_state,  # [x, y, z, r] 当前PLC反馈的坐标
-        elbow_config,  # 当前机械臂的elbow状态
+        elbow_config,  # 当前机械臂的elbow状态，('elbow_up' 或 'elbow_down')
         robot_joints,  # [j1, j2, j3, j4] 当前关节角
 
         # --- 标定参数 ---
